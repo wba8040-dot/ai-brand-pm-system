@@ -45,9 +45,62 @@ const Auth = (() => {
     return m;
   }
 
-  // ---------- 登入／註冊 ----------
+  // ---------- 記住 Email（只存 Email，不存密碼） ----------
+  const REMEMBER_KEY = 'pm.rememberEmail';
+  function rememberedEmail() {
+    try { return localStorage.getItem(REMEMBER_KEY) || ''; } catch (e) { return ''; }
+  }
+  function setRememberedEmail(email) {
+    try {
+      if (email) localStorage.setItem(REMEMBER_KEY, email);
+      else localStorage.removeItem(REMEMBER_KEY);
+    } catch (e) { /* 無痕模式等無法使用 localStorage 時，略過即可 */ }
+  }
+
+  // ---------- 重設密碼信連結回來時的狀態 ----------
+  // 必須在 supabase 清掉網址 hash 之前讀取，所以在載入時就先記下來
+  const bootHash = location.hash || '';
+  let recoveryPending = /type=recovery/.test(bootHash);
+  let bootLinkError = /error_code=|error=/.test(bootHash)
+    ? (/otp_expired|expired/i.test(bootHash)
+        ? '這個連結已失效或已使用過，請重新申請。'
+        : '連結無法使用，請重新申請。')
+    : '';
+  if (API.sb) {
+    API.sb.auth.onAuthStateChange((event) => {
+      if (event === 'PASSWORD_RECOVERY') recoveryPending = true;
+    });
+  }
+  /** 取出並清除「需要設定新密碼」的狀態（只會回傳一次 true） */
+  function consumeRecovery() {
+    const r = recoveryPending;
+    recoveryPending = false;
+    return r;
+  }
+  /** 取出並清除「連結失效」訊息（只顯示一次） */
+  function consumeLinkError() {
+    const m = bootLinkError;
+    bootLinkError = '';
+    return m;
+  }
+
+  // ---------- 登入／註冊／忘記密碼 ----------
+  // mode: 'login' | 'signup' | 'forgot'
   function renderLogin(message = '', mode = 'login') {
+    if (!message && mode === 'login') {
+      const linkErr = consumeLinkError();
+      if (linkErr) {
+        message = linkErr;
+        history.replaceState(null, '', location.pathname);
+      }
+    }
     const isSignup = mode === 'signup';
+    const isForgot = mode === 'forgot';
+    const saved = rememberedEmail();
+    const title = isSignup ? '註冊新帳號' : isForgot ? '忘記密碼' : '登入';
+    const submitText = isSignup ? '建立帳號' : isForgot ? '寄送重設連結' : '登入';
+    const busyText = isSignup ? '建立中…' : isForgot ? '寄送中…' : '登入中…';
+
     document.getElementById('app').innerHTML = `
       <div class="auth-wrap">
         <div class="auth-card">
@@ -58,39 +111,59 @@ const Auth = (() => {
               <p>專案進度、行銷成效與 AI 預警，一個平台管理</p>
             </div>
           </div>
-          <div class="tabs">
-            <button class="tab ${isSignup ? '' : 'active'}" data-mode="login">登入</button>
-            <button class="tab ${isSignup ? 'active' : ''}" data-mode="signup">註冊新帳號</button>
-          </div>
-          ${message ? `<div class="notice">${U.esc(message)}</div>` : ''}
-          <form id="auth-form" autocomplete="on">
+          <h2 class="auth-title">${title}</h2>
+          ${message ? `<div class="notice" role="status">${U.esc(message)}</div>` : ''}
+          ${isForgot ? '<p class="muted small">輸入註冊用的 Email，我們會寄一封重設密碼的連結給你。</p>' : ''}
+          <form id="auth-form" autocomplete="on" novalidate>
             <label>Email
-              <input type="email" name="email" required autocomplete="username" placeholder="name@company.com">
+              <input type="email" name="email" required autocomplete="username" placeholder="name@company.com"
+                value="${isSignup ? '' : U.esc(saved)}">
             </label>
+            ${isForgot ? '' : `
             <label>密碼
               <div class="pw-field">
                 <input type="password" name="password" required autocomplete="${isSignup ? 'new-password' : 'current-password'}">
-                <button type="button" class="pw-toggle">顯示</button>
+                <button type="button" class="pw-toggle" aria-label="顯示密碼">顯示</button>
               </div>
-            </label>
+            </label>`}
             ${isSignup ? `
             <label>再輸入一次密碼
               <input type="password" name="password2" required autocomplete="new-password">
             </label>
             <p class="muted small">密碼至少 ${cfg.MIN_PASSWORD} 個字元，需包含英文字母與數字。</p>` : ''}
-            <div class="form-error" id="auth-error"></div>
-            <button class="btn primary block" type="submit">${isSignup ? '建立帳號' : '登入'}</button>
+            ${mode === 'login' ? `
+            <div class="auth-row">
+              <label class="check-inline">
+                <input type="checkbox" name="remember" ${saved ? 'checked' : ''}> 記住我的 Email
+              </label>
+              <button type="button" class="link-btn" data-mode="forgot">忘記密碼？</button>
+            </div>` : ''}
+            <div class="form-error" id="auth-error" role="alert"></div>
+            <button class="btn primary block" type="submit">${submitText}</button>
           </form>
-          <p class="auth-hint">${isSignup
+          <p class="auth-switch">
+            ${mode === 'login'
+              ? '還沒有帳號？<button type="button" class="link-btn" data-mode="signup">註冊新帳號</button>'
+              : isSignup
+                ? '已經有帳號？<button type="button" class="link-btn" data-mode="login">返回登入</button>'
+                : '<button type="button" class="link-btn" data-mode="login">← 返回登入</button>'}
+          </p>
+          ${isForgot ? '' : `<p class="auth-hint">${isSignup
             ? '註冊後可以「建立新公司」，或輸入主管提供的「邀請碼」加入公司。'
-            : '員工請先用公司 Email 註冊帳號，再輸入專案經理提供的邀請碼。'}</p>
+            : '員工請先用公司 Email 註冊帳號，再輸入專案經理提供的邀請碼。'}</p>`}
         </div>
       </div>`;
 
     bindPwToggle();
-    document.querySelectorAll('.tab').forEach((t) => { t.onclick = () => renderLogin('', t.dataset.mode); });
+    document.querySelectorAll('.auth-card [data-mode]').forEach((b) => {
+      b.onclick = () => renderLogin('', b.dataset.mode);
+    });
 
     const form = document.getElementById('auth-form');
+    // 有記住 Email 時，游標直接放在密碼欄
+    const firstEmpty = [...form.querySelectorAll('input[type=email], input[type=password]')].find((i) => !i.value);
+    (firstEmpty || form.querySelector('input'))?.focus();
+
     form.onsubmit = async (e) => {
       e.preventDefault();
       const f = U.formData(form);
@@ -98,17 +171,28 @@ const Auth = (() => {
       const btn = form.querySelector('button[type=submit]');
       errBox.textContent = '';
 
+      const email = String(f.email || '').trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return (errBox.textContent = '請輸入正確的 Email');
+      if (!isForgot && !f.password) return (errBox.textContent = '請輸入密碼');
       if (isSignup) {
         const p = passwordProblem(f.password);
         if (p) return (errBox.textContent = p);
         if (f.password !== f.password2) return (errBox.textContent = '兩次輸入的密碼不一致');
       }
 
-      btn.disabled = true; btn.textContent = isSignup ? '建立中…' : '登入中…';
+      btn.disabled = true; btn.textContent = busyText;
       try {
+        if (isForgot) {
+          const { error } = await API.sb.auth.resetPasswordForEmail(email, {
+            redirectTo: location.origin + location.pathname
+          });
+          if (error) return (errBox.textContent = authErrorText(error));
+          // 不透露這個 Email 是否有註冊，統一顯示相同訊息
+          return renderLogin(`如果「${email}」有註冊，幾分鐘內會收到重設密碼信（也請檢查垃圾郵件匣）。點信中的連結即可設定新密碼。`, 'login');
+        }
         if (isSignup) {
           const { data, error } = await API.sb.auth.signUp({
-            email: f.email, password: f.password,
+            email, password: f.password,
             options: { emailRedirectTo: location.origin + location.pathname }
           });
           if (error) return (errBox.textContent = authErrorText(error));
@@ -116,15 +200,67 @@ const Auth = (() => {
             return renderLogin('帳號已建立！請到信箱點選確認連結，完成後回到這裡登入。', 'login');
           }
         } else {
-          const { error } = await API.sb.auth.signInWithPassword({ email: f.email, password: f.password });
+          const { error } = await API.sb.auth.signInWithPassword({ email, password: f.password });
           if (error) return (errBox.textContent = authErrorText(error));
+          setRememberedEmail(f.remember ? email : '');
           API.sb.rpc('touch_last_login').then(() => {}, () => {});
         }
         await App.start();
       } catch (err) {
         errBox.textContent = err.message;
       } finally {
-        btn.disabled = false; btn.textContent = isSignup ? '建立帳號' : '登入';
+        if (btn.isConnected) { btn.disabled = false; btn.textContent = submitText; }
+      }
+    };
+  }
+
+  // ---------- 從重設密碼信回來：設定新密碼 ----------
+  function renderResetPassword(email) {
+    history.replaceState(null, '', location.pathname);
+    document.getElementById('app').innerHTML = `
+      <div class="auth-wrap">
+        <div class="auth-card">
+          <h2 class="auth-title">設定新密碼</h2>
+          <p class="muted small">帳號：${U.esc(email || '')}</p>
+          <form id="reset-form" novalidate>
+            <label>新密碼
+              <div class="pw-field">
+                <input type="password" name="pw1" required autocomplete="new-password">
+                <button type="button" class="pw-toggle" aria-label="顯示密碼">顯示</button>
+              </div>
+            </label>
+            <label>再輸入一次<input type="password" name="pw2" required autocomplete="new-password"></label>
+            <p class="muted small">密碼至少 ${cfg.MIN_PASSWORD} 個字元，需包含英文字母與數字。</p>
+            <div class="form-error" id="reset-error" role="alert"></div>
+            <button class="btn primary block" type="submit">儲存新密碼並登入</button>
+          </form>
+          <p class="auth-switch"><button type="button" class="link-btn" id="reset-cancel">取消並登出</button></p>
+        </div>
+      </div>`;
+    bindPwToggle();
+    const form = document.getElementById('reset-form');
+    form.querySelector('input').focus();
+    document.getElementById('reset-cancel').onclick = logout;
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const { pw1, pw2 } = U.formData(form);
+      const err = document.getElementById('reset-error');
+      const btn = form.querySelector('button[type=submit]');
+      err.textContent = '';
+      const p = passwordProblem(pw1 || '');
+      if (p) return (err.textContent = p);
+      if (pw1 !== pw2) return (err.textContent = '兩次輸入的密碼不一致');
+      btn.disabled = true; btn.textContent = '儲存中…';
+      try {
+        const { error } = await API.sb.auth.updateUser({ password: pw1 });
+        if (error) throw new Error(/same|different/i.test(error.message) ? '新密碼不可與舊密碼相同' : authErrorText(error));
+        // 已加入公司的帳號才有這個紀錄；尚未加入公司時失敗可忽略
+        await API.sb.rpc('mark_password_changed').then(() => {}, () => {});
+        U.toast('密碼已更新', 'ok');
+        await App.start();
+      } catch (e2) {
+        err.textContent = e2.message;
+        btn.disabled = false; btn.textContent = '儲存新密碼並登入';
       }
     };
   }
@@ -285,7 +421,7 @@ const Auth = (() => {
   }
 
   return {
-    current, loadProfile, getSession, logout,
-    renderLogin, renderOnboarding, renderChangePassword, renderBlocked, renderNotConfigured
+    current, loadProfile, getSession, logout, consumeRecovery,
+    renderLogin, renderResetPassword, renderOnboarding, renderChangePassword, renderBlocked, renderNotConfigured
   };
 })();
