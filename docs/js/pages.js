@@ -43,12 +43,32 @@ const Pages = (() => {
   // 1. 專案儀表板
   // =====================================================================
   async function dashboard(el) {
-    const [ov, tasks, camps, work, alerts, metrics] = await Promise.all([
+    const [ovAll, tasksAll, campsAll, work, alertsAll, metricsAll] = await Promise.all([
       API.q.projectOverview(), API.q.tasks(), API.q.campaignSummary(),
       API.q.workload(), API.q.alerts(), API.q.metrics()
     ]).then((rs) => rs.map((r, i) => API.check(r, ['專案總覽', '任務', '活動', '負荷', '預警', '成效'][i])));
 
-    const o = ov || {};
+    // 還沒有任何專案：引導建立
+    const pid = API.currentProjectId();
+    if (!pid) {
+      el.innerHTML = `<div class="card welcome">
+        <h3>👋 歡迎使用！先建立第一個專案吧</h3>
+        <p class="muted">建議順序：① 建立專案 → ② 建立行銷活動 → ③ 邀請成員 → ④ 建立任務。</p>
+        <div class="row-actions">
+        ${isLeaderOrPM() ? '<a class="btn primary" href="#/projects">前往建立專案</a>' : '<p class="muted">請等待專案經理建立專案。</p>'}
+        ${isPM() ? '<a class="btn outline" href="#/accounts">邀請成員</a>' : ''}
+        </div>
+      </div>`;
+      return;
+    }
+
+    // 只看目前選擇的專案
+    const o = ovAll.find((p) => p.project_id === pid) || {};
+    const campIds = new Set(campsAll.filter((c) => c.project_id === pid).map((c) => c.campaign_id));
+    const camps = campsAll.filter((c) => campIds.has(c.campaign_id));
+    const tasks = tasksAll.filter((t) => !t.campaign_id || campIds.has(t.campaign_id));
+    const alerts = alertsAll.filter((a) => !a.campaign_id || campIds.has(a.campaign_id));
+    const metrics = metricsAll.filter((m) => campIds.has(m.campaign_id));
     const usedRate = U.num(o.used_budget) / (U.num(o.total_budget) || 1);
     const openAlerts = alerts.filter((a) => a.handle_status !== '已結案');
     const highAlerts = openAlerts.filter((a) => a.alert_level === '高');
@@ -109,7 +129,7 @@ const Pages = (() => {
         <div class="card"><div class="card-head"><h4>任務狀態分布</h4></div><div class="chart-box"><canvas id="c-status"></canvas></div></div>
         <div class="card span-2"><div class="card-head"><h4>各活動預算 vs 實際支出</h4></div><div class="chart-box"><canvas id="c-budget"></canvas></div></div>
         <div class="card span-2"><div class="card-head"><h4>每日營收與廣告花費</h4></div><div class="chart-box"><canvas id="c-trend"></canvas></div></div>
-        <div class="card"><div class="card-head"><h4>各活動 ROAS</h4><span class="muted small">目標 ${cfg.ROAS_TARGET}</span></div><div class="chart-box"><canvas id="c-roas"></canvas></div></div>
+        <div class="card"><div class="card-head"><h4>各活動 ROAS</h4><span class="muted small">目標 ${API.roasTarget()}</span></div><div class="chart-box"><canvas id="c-roas"></canvas></div></div>
         <div class="card"><div class="card-head"><h4>組員本週負荷</h4></div><div class="chart-box"><canvas id="c-work"></canvas></div></div>
         <div class="card">
           <div class="card-head"><h4>待處理 AI 預警</h4><a href="#/alerts" class="small">全部 →</a></div>
@@ -183,8 +203,8 @@ const Pages = (() => {
         labels: roasCamps.map((c) => c.name),
         datasets: [
           { type: 'bar', label: 'ROAS', data: roasCamps.map((c) => U.num(c.roas)),
-            backgroundColor: roasCamps.map((c) => U.num(c.roas) < cfg.ROAS_TARGET ? '#f87171' : '#34d399') },
-          { type: 'line', label: '目標', data: roasCamps.map(() => cfg.ROAS_TARGET), borderColor: '#475569', borderDash: [6, 4], pointRadius: 0 }
+            backgroundColor: roasCamps.map((c) => U.num(c.roas) < API.roasTarget() ? '#f87171' : '#34d399') },
+          { type: 'line', label: '目標', data: roasCamps.map(() => API.roasTarget()), borderColor: '#475569', borderDash: [6, 4], pointRadius: 0 }
         ]
       },
       options: baseChartOpts({ plugins: { legend: { display: false } } })
@@ -310,13 +330,13 @@ const Pages = (() => {
     el.querySelector('#f-owner').onchange = (e) => { taskFilter.owner = e.target.value; draw(); };
     el.querySelector('#f-mine').onchange = (e) => { taskFilter.mine = e.target.checked; draw(); };
     const newBtn = el.querySelector('#btn-new-task');
-    if (newBtn) newBtn.onclick = () => openTaskModal(null, true, rows.map((r) => r.task_id));
+    if (newBtn) newBtn.onclick = () => openTaskModal(null, true);
   }
 
-  async function openTaskModal(task, editable, existingIds = []) {
+  async function openTaskModal(task, editable) {
     const isNew = !task;
     const t = task || {
-      task_id: U.nextId(existingIds, 'T-MKT-'), name: '', status: '未開始', priority: '中',
+      task_id: '', name: '', status: '未開始', priority: '中',
       planned_progress: 0, actual_progress: 0, owner_id: me().member_id,
       planned_start: U.today(), planned_end: '', version: 0
     };
@@ -330,7 +350,7 @@ const Pages = (() => {
     const body = `
       <form id="task-form" class="form-grid">
         <div class="form-section span-2">基本資料 ${lead ? '' : '<span class="muted small">（負責人、日期、權重由組長或專案經理設定）</span>'}</div>
-        <label>任務ID<input name="task_id" value="${U.esc(t.task_id)}" ${isNew ? 'required' : 'disabled'}></label>
+        <label>任務ID<input value="${isNew ? '（儲存後自動產生）' : U.esc(t.task_id)}" disabled></label>
         <label>任務名稱<input name="name" value="${U.esc(t.name)}" required ${dis(editable && lead)}></label>
         <label>負責人<select name="owner_id" ${dis(editable && lead)}>${U.options(memberIds, t.owner_id, { blank: true, labels: memberLabels })}</select></label>
         <label>關聯活動<select name="campaign_id" ${dis(editable && lead)}>${U.options(campIds, t.campaign_id, { blank: true, labels: campLabels })}</select></label>
@@ -456,7 +476,7 @@ const Pages = (() => {
       saveBtn.disabled = true; saveBtn.textContent = '儲存中…';
       try {
         if (isNew) {
-          const res = await API.sb.from('tasks').insert({ task_id: f.task_id, ...patch, progress_source: '系統建立' }).select();
+          const res = await API.sb.from('tasks').insert({ ...patch, progress_source: '系統建立' }).select();
           API.check(res, '建立任務');
           U.toast('任務已建立', 'ok');
         } else {
@@ -650,7 +670,7 @@ const Pages = (() => {
           <div class="legend small"><span class="dot bad"></span>高（≥${highMin}） <span class="dot warn"></span>中（≥${midMin}） <span class="dot ok"></span>低</div>
         </div>
         <div class="card span-2">
-          <div class="card-head"><h4>風險清單</h4><span class="muted small">${isLeaderOrPM() ? '點選列可編輯' : ''}</span></div>
+          <div class="card-head"><h4>風險清單</h4>${isLeaderOrPM() ? '<button class="btn small primary" id="btn-new-risk">＋ 新增風險</button>' : ''}</div>
           <div class="table-wrap"><table class="table">
             <thead><tr><th>風險</th><th>類型</th><th>分數</th><th>等級</th><th>負責人</th><th>應對期限</th><th>狀態</th></tr></thead>
             <tbody>${rk.map((r) => `<tr data-risk="${U.esc(r.risk_id)}" class="${isLeaderOrPM() ? 'clickable' : ''}">
@@ -666,7 +686,7 @@ const Pages = (() => {
       </div>
 
       <div class="card">
-        <div class="card-head"><h4>問題追蹤（未解決 ${openIssues.length} 項）</h4></div>
+        <div class="card-head"><h4>問題追蹤（未解決 ${openIssues.length} 項）</h4>${isLeaderOrPM() ? '<button class="btn small primary" id="btn-new-issue">＋ 新增問題</button>' : ''}</div>
         <div class="table-wrap"><table class="table">
           <thead><tr><th>問題</th><th>嚴重程度</th><th>負責人</th><th>發現日</th><th>預計解決</th><th>逾期</th><th>升級</th><th>狀態</th></tr></thead>
           <tbody>${is.map((i) => `<tr data-issue="${U.esc(i.issue_id)}" class="${isLeaderOrPM() || i.owner_id === me().member_id ? 'clickable' : ''}">
@@ -688,62 +708,104 @@ const Pages = (() => {
       el.querySelectorAll('[data-issue]').forEach((tr) => {
         tr.onclick = () => openIssueModal(is.find((x) => x.issue_id === tr.dataset.issue));
       });
+      el.querySelector('#btn-new-risk').onclick = () => openRiskModal(null, midMin, highMin);
+      el.querySelector('#btn-new-issue').onclick = () => openIssueModal(null);
     }
   }
 
+  // 風險：新增或編輯（r 為 null 代表新增）
   function openRiskModal(r, midMin, highMin) {
+    const isNew = !r;
+    r = r || { probability: 3, impact: 3, status: '待處理', owner_id: me().member_id };
+    const memberIds = (API.cache.members || []).map((m) => m.member_id);
+    const memberLabels = Object.fromEntries((API.cache.members || []).map((m) => [m.member_id, m.name]));
+    const campIds = (API.cache.campaigns || []).map((c) => c.campaign_id);
+    const campLabels = Object.fromEntries((API.cache.campaigns || []).map((c) => [c.campaign_id, c.name]));
     const body = `
       <form id="risk-form" class="form-grid">
+        <label class="span-2">風險名稱<input name="name" required maxlength="100" value="${U.esc(r.name || '')}"></label>
+        <label>風險類型<select name="risk_type">${U.options(API.opts('風險類型', ['進度', '成本', '人力', '技術', '品質', '外部']), r.risk_type, { blank: true })}</select></label>
+        <label>風險負責人<select name="owner_id">${U.options(memberIds, r.owner_id, { blank: true, labels: memberLabels })}</select></label>
+        <label>關聯活動<select name="campaign_id">${U.options(campIds, r.campaign_id, { blank: true, labels: campLabels })}</select></label>
+        <label>關聯任務ID<input name="task_id" value="${U.esc(r.task_id || '')}" placeholder="例如 T-003，可留空"></label>
         <label>發生機率（1–5）<input type="number" name="probability" min="1" max="5" value="${U.esc(r.probability ?? 3)}" required></label>
         <label>影響程度（1–5）<input type="number" name="impact" min="1" max="5" value="${U.esc(r.impact ?? 3)}" required></label>
         <label>風險狀態<select name="status">${U.options(API.opts('風險狀態', ['待處理', '處理中', '已結案']), r.status)}</select></label>
         <label>應對期限<input type="date" name="response_due" value="${U.esc(r.response_due || '')}"></label>
+        <label class="span-2">風險描述<textarea name="description" rows="2">${U.esc(r.description || '')}</textarea></label>
         <label class="span-2">應對措施<textarea name="response_plan" rows="3">${U.esc(r.response_plan || '')}</textarea></label>
-        <p class="muted small span-2">風險等級會依分數自動判定：≥${highMin} 高、≥${midMin} 中、其餘低。</p>
+        <p class="muted small span-2">風險等級依分數（機率×影響）自動判定：≥${highMin} 高、≥${midMin} 中、其餘低。</p>
       </form><div class="form-error" id="risk-error"></div>`;
-    const m = U.openModal({ title: `${r.risk_id}｜${r.name}`, body,
-      footer: '<span class="spacer"></span><button class="btn ghost" data-cancel>取消</button><button class="btn primary" id="btn-save">儲存</button>' });
+    const m = U.openModal({
+      title: isNew ? '新增風險' : `${r.risk_id}｜${r.name}`, body, wide: true,
+      footer: `<span class="spacer"></span><button class="btn ghost" data-cancel>取消</button><button class="btn primary" id="btn-save">${isNew ? '建立' : '儲存'}</button>`
+    });
     m.querySelector('[data-cancel]').onclick = U.closeModal;
-    m.querySelector('#btn-save').onclick = async () => {
+    m.querySelector('#btn-save').onclick = async (ev) => {
       const form = m.querySelector('#risk-form');
       if (!form.reportValidity()) return;
       const f = U.formData(form);
       const score = U.num(f.probability) * U.num(f.impact);
+      const row = {
+        name: f.name, risk_type: f.risk_type || null, owner_id: f.owner_id || null,
+        campaign_id: f.campaign_id || null, task_id: f.task_id ? f.task_id.toUpperCase() : null,
+        probability: U.num(f.probability), impact: U.num(f.impact),
+        risk_level: score >= highMin ? '高' : score >= midMin ? '中' : '低',
+        status: f.status, response_due: f.response_due || null,
+        description: f.description || null, response_plan: f.response_plan || null,
+        last_assessed: U.today()
+      };
+      ev.target.disabled = true;
       try {
-        await API.updateWithVersion('risks', 'risk_id', r.risk_id, r.version, {
-          probability: U.num(f.probability), impact: U.num(f.impact),
-          risk_level: score >= highMin ? '高' : score >= midMin ? '中' : '低',
-          status: f.status, response_due: f.response_due || null, response_plan: f.response_plan || null,
-          last_assessed: U.today()
-        });
-        U.toast('風險已更新', 'ok'); U.closeModal(); App.renderPage();
-      } catch (e) { m.querySelector('#risk-error').textContent = e.message; }
+        if (isNew) await API.insert('risks', row, '新增風險');
+        else await API.updateWithVersion('risks', 'risk_id', r.risk_id, r.version, row);
+        U.toast(isNew ? '風險已建立' : '風險已更新', 'ok'); U.closeModal(); App.renderPage();
+      } catch (e) { m.querySelector('#risk-error').textContent = e.message; ev.target.disabled = false; }
     };
   }
 
+  // 問題：新增或編輯（i 為 null 代表新增）
   function openIssueModal(i) {
+    const isNew = !i;
+    i = i || { status: '待處理', severity: '中', found_date: U.today(), owner_id: me().member_id };
+    const memberIds = (API.cache.members || []).map((m) => m.member_id);
+    const memberLabels = Object.fromEntries((API.cache.members || []).map((m) => [m.member_id, m.name]));
     const body = `
       <form id="issue-form" class="form-grid">
+        <label class="span-2">問題名稱<input name="name" required maxlength="100" value="${U.esc(i.name || '')}"></label>
+        <label>嚴重程度<select name="severity">${U.options(API.opts('問題嚴重程度', ['高', '中', '低']), i.severity)}</select></label>
+        <label>問題負責人<select name="owner_id">${U.options(memberIds, i.owner_id, { blank: true, labels: memberLabels })}</select></label>
+        <label>關聯任務ID<input name="task_id" value="${U.esc(i.task_id || '')}" placeholder="例如 T-003，可留空"></label>
+        <label>發現日期<input type="date" name="found_date" value="${U.esc(i.found_date || '')}"></label>
         <label>問題狀態<select name="status">${U.options(API.opts('問題狀態', ['待處理', '處理中', '已解決']), i.status)}</select></label>
-        <label>實際解決日<input type="date" name="resolved_date" value="${U.esc(i.resolved_date || '')}"></label>
         <label>預計解決日<input type="date" name="due_date" value="${U.esc(i.due_date || '')}"></label>
+        <label>實際解決日<input type="date" name="resolved_date" value="${U.esc(i.resolved_date || '')}"></label>
         <label class="check"><input type="checkbox" name="escalated" ${i.escalated ? 'checked' : ''}> 升級處理</label>
+        <label class="span-2">問題描述<textarea name="description" rows="2">${U.esc(i.description || '')}</textarea></label>
         <label class="span-2">解決方案<textarea name="solution" rows="3">${U.esc(i.solution || '')}</textarea></label>
       </form><div class="form-error" id="issue-error"></div>`;
-    const m = U.openModal({ title: `${i.issue_id}｜${i.name}`, body,
-      footer: '<span class="spacer"></span><button class="btn ghost" data-cancel>取消</button><button class="btn primary" id="btn-save">儲存</button>' });
+    const m = U.openModal({
+      title: isNew ? '新增問題' : `${i.issue_id}｜${i.name}`, body, wide: true,
+      footer: `<span class="spacer"></span><button class="btn ghost" data-cancel>取消</button><button class="btn primary" id="btn-save">${isNew ? '建立' : '儲存'}</button>`
+    });
     m.querySelector('[data-cancel]').onclick = U.closeModal;
-    m.querySelector('#btn-save').onclick = async () => {
+    m.querySelector('#btn-save').onclick = async (ev) => {
       const form = m.querySelector('#issue-form');
+      if (!form.reportValidity()) return;
       const f = U.formData(form);
-      const resolved = f.status === '已解決' ? (f.resolved_date || U.today()) : (f.resolved_date || null);
+      const row = {
+        name: f.name, severity: f.severity, owner_id: f.owner_id || null,
+        task_id: f.task_id ? f.task_id.toUpperCase() : null, found_date: f.found_date || null,
+        status: f.status, due_date: f.due_date || null,
+        resolved_date: f.status === '已解決' ? (f.resolved_date || U.today()) : (f.resolved_date || null),
+        escalated: form.escalated.checked, description: f.description || null, solution: f.solution || null
+      };
+      ev.target.disabled = true;
       try {
-        await API.updateWithVersion('issues', 'issue_id', i.issue_id, i.version, {
-          status: f.status, resolved_date: resolved, due_date: f.due_date || null,
-          escalated: form.escalated.checked, solution: f.solution || null
-        });
-        U.toast('問題已更新', 'ok'); U.closeModal(); App.renderPage();
-      } catch (e) { m.querySelector('#issue-error').textContent = e.message; }
+        if (isNew) await API.insert('issues', row, '新增問題');
+        else await API.updateWithVersion('issues', 'issue_id', i.issue_id, i.version, row);
+        U.toast(isNew ? '問題已建立' : '問題已更新', 'ok'); U.closeModal(); App.renderPage();
+      } catch (e) { m.querySelector('#issue-error').textContent = e.message; ev.target.disabled = false; }
     };
   }
 
@@ -751,8 +813,10 @@ const Pages = (() => {
   // 5. 行銷活動成效
   // =====================================================================
   async function campaigns(el) {
-    const [camps, metrics] = await Promise.all([API.q.campaignSummary(), API.q.metrics()])
+    const [campsAll, metrics] = await Promise.all([API.q.campaignSummary(), API.q.metrics()])
       .then(([a, b]) => [API.check(a, '讀取活動'), API.check(b, '讀取成效')]);
+    const pid = API.currentProjectId();
+    const camps = campsAll.filter((c) => !pid || c.project_id === pid);
     const warnRate = U.num(API.cache.settings?.['預算使用警戒比例'] || 0.9);
 
     const totals = camps.reduce((s, c) => ({
@@ -765,14 +829,14 @@ const Pages = (() => {
         <div class="kpi"><div class="kpi-label">活動數</div><div class="kpi-value">${camps.length}</div></div>
         <div class="kpi"><div class="kpi-label">核定預算</div><div class="kpi-value">${U.money(totals.budget)}</div></div>
         <div class="kpi"><div class="kpi-label">實際支出</div><div class="kpi-value">${U.money(totals.spend)}</div><div class="kpi-sub">${U.pct(totals.spend / (totals.budget || 1))}</div></div>
-        <div class="kpi"><div class="kpi-label">整體 ROAS</div><div class="kpi-value ${totals.rev / (totals.ad || 1) < cfg.ROAS_TARGET ? 'bad-text' : 'ok-text'}">${U.dec(totals.rev / (totals.ad || 1))}</div></div>
+        <div class="kpi"><div class="kpi-label">整體 ROAS</div><div class="kpi-value ${totals.rev / (totals.ad || 1) < API.roasTarget() ? 'bad-text' : 'ok-text'}">${U.dec(totals.rev / (totals.ad || 1))}</div></div>
         <div class="kpi"><div class="kpi-label">總轉換數</div><div class="kpi-value">${U.int(totals.conv)}</div></div>
       </div>
 
       <div class="camp-grid">
         ${camps.map((c) => {
           const rate = U.num(c.budget_usage_rate);
-          const roasBad = c.roas !== null && U.num(c.roas) < cfg.ROAS_TARGET;
+          const roasBad = c.roas !== null && U.num(c.roas) < API.roasTarget();
           return `<div class="card camp">
             <div class="camp-head"><div><b>${U.esc(c.name)}</b><div class="muted small">${U.esc(c.campaign_id)}・${U.date(c.planned_start)} → ${U.date(c.planned_end)}</div></div>${U.chip(c.status)}</div>
             <div class="small">預算使用 ${U.money(c.actual_spend)} / ${U.money(c.approved_budget)}</div>
@@ -836,5 +900,483 @@ const Pages = (() => {
     drawWorkloadChart('c-work2', work);
   }
 
-  return { dashboard, tasks, alerts, risks, campaigns, members };
+  // =====================================================================
+  // 7. 專案與活動設定（專案經理、組長）
+  // =====================================================================
+  async function projects(el) {
+    const [ov, camps] = await Promise.all([API.q.projectOverview(), API.q.campaigns()])
+      .then(([a, b]) => [API.check(a, '讀取專案'), API.check(b, '讀取活動')]);
+    const pid = API.currentProjectId();
+    const shownCamps = camps.filter((c) => !pid || c.project_id === pid || !c.project_id);
+
+    el.innerHTML = `
+      <div class="section-head">
+        <h3>專案（${ov.length}）</h3>
+        <button class="btn primary" id="btn-new-project">＋ 新增專案</button>
+      </div>
+      <div class="camp-grid">
+        ${ov.map((p) => `
+          <div class="card camp ${p.project_id === pid ? 'selected' : ''}">
+            <div class="camp-head"><div><b>${U.esc(p.name)}</b>
+              <div class="muted small">${U.esc(p.project_id)}・${U.date(p.start_date)} → ${U.date(p.planned_end_date)}</div></div>${U.chip(p.status)}</div>
+            ${U.progressBar(p.overall_actual_progress, p.overall_planned_progress)}
+            <div class="camp-stats">
+              <div><span>活動</span><b>${U.int(p.campaign_count)}</b></div>
+              <div><span>未完成任務</span><b>${U.int(p.open_tasks)}</b></div>
+              <div><span>總預算</span><b>${U.money(p.total_budget)}</b></div>
+            </div>
+            <div class="row-actions">
+              ${p.project_id === pid ? '<span class="chip info">目前專案</span>' : `<button class="btn small ghost" data-use="${U.esc(p.project_id)}">切換到此專案</button>`}
+              <span class="spacer"></span>
+              <button class="btn small outline" data-edit-project="${U.esc(p.project_id)}">編輯</button>
+            </div>
+          </div>`).join('') || emptyState('還沒有專案，按「新增專案」開始')}
+      </div>
+
+      <div class="section-head">
+        <h3>行銷活動（${U.esc(API.projectName(pid))}）</h3>
+        <button class="btn primary" id="btn-new-campaign" ${ov.length ? '' : 'disabled'}>＋ 新增活動</button>
+      </div>
+      <div class="card no-pad"><div class="table-wrap"><table class="table">
+        <thead><tr><th>活動</th><th>類型</th><th>負責人</th><th>期間</th><th>核定預算</th><th>狀態</th></tr></thead>
+        <tbody>${shownCamps.map((c) => `<tr class="clickable" data-camp="${U.esc(c.campaign_id)}">
+          <td><div class="cell-title">${U.esc(c.name)}</div><div class="muted small">${U.esc(c.campaign_id)}</div></td>
+          <td>${U.esc(c.campaign_type || '—')}</td>
+          <td>${U.esc(API.memberName(c.owner_id))}</td>
+          <td class="small">${U.date(c.planned_start)} → ${U.date(c.planned_end)}</td>
+          <td>${U.money(c.approved_budget)}</td>
+          <td>${U.chip(c.status)}</td></tr>`).join('') || `<tr><td colspan="6">${emptyState('這個專案還沒有行銷活動')}</td></tr>`}</tbody>
+      </table></div></div>`;
+
+    el.querySelector('#btn-new-project').onclick = () => openProjectModal(null);
+    el.querySelector('#btn-new-campaign').onclick = () => openCampaignModal(null);
+    el.querySelectorAll('[data-edit-project]').forEach((b) => {
+      b.onclick = async () => {
+        const row = API.check(await API.sb.from('projects').select('*').eq('project_id', b.dataset.editProject).single(), '讀取專案');
+        openProjectModal(row);
+      };
+    });
+    el.querySelectorAll('[data-use]').forEach((b) => { b.onclick = () => { API.setProject(b.dataset.use); App.refreshAll(); }; });
+    el.querySelectorAll('[data-camp]').forEach((tr) => {
+      tr.onclick = () => openCampaignModal(camps.find((c) => c.campaign_id === tr.dataset.camp));
+    });
+  }
+
+  function openProjectModal(p) {
+    const isNew = !p;
+    p = p || { status: '進行中', start_date: U.today(), owner_name: me().name };
+    const body = `
+      <form id="proj-form" class="form-grid">
+        <label class="span-2">專案名稱<input name="name" required maxlength="80" value="${U.esc(p.name || '')}"></label>
+        <label>專案負責人<input name="owner_name" maxlength="40" value="${U.esc(p.owner_name || '')}"></label>
+        <label>專案狀態<select name="status">${U.options(API.opts('專案狀態', ['未開始', '進行中', '暫停', '完成']), p.status)}</select></label>
+        <label>開始日期<input type="date" name="start_date" value="${U.esc(p.start_date || '')}"></label>
+        <label>預計結束日期<input type="date" name="planned_end_date" value="${U.esc(p.planned_end_date || '')}"></label>
+        <label>專案總預算<input type="number" name="total_budget" min="0" step="1000" value="${U.esc(p.total_budget ?? '')}"></label>
+        <label>預測完成日期<input type="date" name="forecast_end_date" value="${U.esc(p.forecast_end_date || '')}"></label>
+        <label class="span-2">專案目標<textarea name="objective" rows="3">${U.esc(p.objective || '')}</textarea></label>
+      </form><div class="form-error" id="proj-error"></div>`;
+    const m = U.openModal({
+      title: isNew ? '新增專案' : `編輯專案｜${p.name}`, body, wide: true,
+      footer: `${!isNew && isPM() ? '<button class="btn danger ghost" id="btn-del">刪除</button>' : ''}<span class="spacer"></span>
+        <button class="btn ghost" data-cancel>取消</button><button class="btn primary" id="btn-save">${isNew ? '建立' : '儲存'}</button>`
+    });
+    m.querySelector('[data-cancel]').onclick = U.closeModal;
+    m.querySelector('#btn-save').onclick = async (ev) => {
+      const form = m.querySelector('#proj-form');
+      if (!form.reportValidity()) return;
+      const f = U.emptyToNull(U.formData(form));
+      if (f.start_date && f.planned_end_date && f.planned_end_date < f.start_date) {
+        m.querySelector('#proj-error').textContent = '結束日期不可早於開始日期'; return;
+      }
+      f.total_budget = f.total_budget === null ? 0 : U.num(f.total_budget);
+      ev.target.disabled = true;
+      try {
+        if (isNew) {
+          const row = await API.insert('projects', f, '新增專案');
+          API.setProject(row.project_id);
+        } else {
+          await API.updateWithVersion('projects', 'project_id', p.project_id, p.version, f);
+        }
+        U.toast('專案已儲存', 'ok'); U.closeModal(); App.refreshAll();
+      } catch (e) { m.querySelector('#proj-error').textContent = e.message; ev.target.disabled = false; }
+    };
+    const del = m.querySelector('#btn-del');
+    if (del) del.onclick = async () => {
+      if (!(await U.confirmBox(`確定要刪除專案「${p.name}」嗎？（軟刪除，活動與任務不會被刪除）`, '刪除', true))) return;
+      try {
+        await API.updateWithVersion('projects', 'project_id', p.project_id, p.version, { is_deleted: true });
+        U.toast('專案已刪除', 'ok'); App.refreshAll();
+      } catch (e) { U.toast(e.message, 'bad', 6000); }
+    };
+  }
+
+  function openCampaignModal(c) {
+    const isNew = !c;
+    c = c || { project_id: API.currentProjectId(), status: '規劃中', owner_id: me().member_id, planned_start: U.today() };
+    const projIds = (API.cache.projects || []).map((p) => p.project_id);
+    const projLabels = Object.fromEntries((API.cache.projects || []).map((p) => [p.project_id, p.name]));
+    const memberIds = (API.cache.members || []).map((x) => x.member_id);
+    const memberLabels = Object.fromEntries((API.cache.members || []).map((x) => [x.member_id, x.name]));
+    const body = `
+      <form id="camp-form" class="form-grid">
+        <label class="span-2">活動名稱<input name="name" required maxlength="80" value="${U.esc(c.name || '')}"></label>
+        <label>所屬專案<select name="project_id" required>${U.options(projIds, c.project_id, { labels: projLabels })}</select></label>
+        <label>活動類型<select name="campaign_type">${U.options(API.opts('活動類型', ['品牌曝光', '會員招募', '轉換促購', '口碑行銷', '再行銷', '其他']), c.campaign_type, { blank: true })}</select></label>
+        <label>活動負責人<select name="owner_id">${U.options(memberIds, c.owner_id, { blank: true, labels: memberLabels })}</select></label>
+        <label>活動狀態<select name="status">${U.options(API.opts('活動狀態', ['規劃中', '待審核', '進行中', '已完成', '已取消']), c.status)}</select></label>
+        <label>計畫開始<input type="date" name="planned_start" value="${U.esc(c.planned_start || '')}"></label>
+        <label>計畫結束<input type="date" name="planned_end" value="${U.esc(c.planned_end || '')}"></label>
+        <label>核定預算<input type="number" name="approved_budget" min="0" step="1000" value="${U.esc(c.approved_budget ?? '')}"></label>
+        <label>目標受眾<input name="target_audience" maxlength="100" value="${U.esc(c.target_audience || '')}"></label>
+        <label class="span-2">活動目標<textarea name="objective" rows="2">${U.esc(c.objective || '')}</textarea></label>
+        <label class="span-2">備註<textarea name="notes" rows="2">${U.esc(c.notes || '')}</textarea></label>
+      </form><div class="form-error" id="camp-error"></div>`;
+    const m = U.openModal({
+      title: isNew ? '新增行銷活動' : `${c.campaign_id}｜${c.name}`, body, wide: true,
+      footer: `${!isNew && isPM() ? '<button class="btn danger ghost" id="btn-del">刪除</button>' : ''}<span class="spacer"></span>
+        <button class="btn ghost" data-cancel>取消</button><button class="btn primary" id="btn-save">${isNew ? '建立' : '儲存'}</button>`
+    });
+    m.querySelector('[data-cancel]').onclick = U.closeModal;
+    m.querySelector('#btn-save').onclick = async (ev) => {
+      const form = m.querySelector('#camp-form');
+      if (!form.reportValidity()) return;
+      const f = U.emptyToNull(U.formData(form));
+      if (f.planned_start && f.planned_end && f.planned_end < f.planned_start) {
+        m.querySelector('#camp-error').textContent = '結束日期不可早於開始日期'; return;
+      }
+      f.approved_budget = f.approved_budget === null ? 0 : U.num(f.approved_budget);
+      ev.target.disabled = true;
+      try {
+        if (isNew) await API.insert('campaigns', { ...f, applicant_id: me().member_id }, '新增活動');
+        else await API.updateWithVersion('campaigns', 'campaign_id', c.campaign_id, c.version, f);
+        U.toast('活動已儲存', 'ok'); U.closeModal(); App.refreshAll();
+      } catch (e) { m.querySelector('#camp-error').textContent = e.message; ev.target.disabled = false; }
+    };
+    const del = m.querySelector('#btn-del');
+    if (del) del.onclick = async () => {
+      if (!(await U.confirmBox(`確定要刪除活動「${c.name}」嗎？`, '刪除', true))) return;
+      try {
+        await API.updateWithVersion('campaigns', 'campaign_id', c.campaign_id, c.version, { is_deleted: true });
+        U.toast('活動已刪除', 'ok'); App.refreshAll();
+      } catch (e) { U.toast(e.message, 'bad', 6000); }
+    };
+  }
+
+  // =====================================================================
+  // 8. 成員與帳號（專案經理）
+  // =====================================================================
+  async function accounts(el) {
+    const [members, profiles, invites] = await Promise.all([
+      API.sb.from('members').select('*').eq('is_deleted', false).order('member_id'),
+      API.q.profiles(), API.q.invitations()
+    ]).then(([a, b, c]) => [API.check(a, '讀取成員'), API.check(b, '讀取帳號'), API.check(c, '讀取邀請')]);
+
+    const profOf = (id) => profiles.find((p) => p.member_id === id);
+    const inviteOf = (id) => invites.find((i) => i.member_id === id && i.status === '待接受');
+    const siteUrl = location.origin + location.pathname;
+
+    const rows = members.map((mb) => {
+      const p = profOf(mb.member_id);
+      const inv = inviteOf(mb.member_id);
+      let state, cls;
+      if (p) { state = p.auth_status === '已授權' ? '已啟用' : '已停用'; cls = p.auth_status === '已授權' ? 'ok' : 'bad'; }
+      else if (inv) { state = '邀請中'; cls = 'warn'; }
+      else { state = '未邀請'; cls = 'muted'; }
+      return { mb, p, inv, state, cls };
+    });
+    const count = (s) => rows.filter((r) => r.state === s).length;
+
+    el.innerHTML = `
+      <div class="kpis small-kpis">
+        <div class="kpi"><div class="kpi-label">成員</div><div class="kpi-value">${rows.length}</div></div>
+        <div class="kpi"><div class="kpi-label">已啟用</div><div class="kpi-value ok-text">${count('已啟用')}</div></div>
+        <div class="kpi"><div class="kpi-label">邀請中</div><div class="kpi-value warn-text">${count('邀請中')}</div></div>
+        <div class="kpi"><div class="kpi-label">未邀請</div><div class="kpi-value">${count('未邀請')}</div></div>
+        <div class="kpi"><div class="kpi-label">已停用</div><div class="kpi-value bad-text">${count('已停用')}</div></div>
+      </div>
+
+      <div class="card howto">
+        <b>員工加入步驟：</b>
+        ① 按「邀請成員」取得 8 碼邀請碼 → ② 把網址與邀請碼傳給員工 → ③ 員工打開
+        <code>${U.esc(siteUrl)}</code>，用<b>被邀請的 Email</b> 註冊 → ④ 登入後輸入邀請碼即可加入。
+      </div>
+
+      <div class="section-head">
+        <h3>成員清單</h3>
+        <button class="btn primary" id="btn-invite">＋ 邀請成員</button>
+      </div>
+      <div class="card no-pad"><div class="table-wrap"><table class="table">
+        <thead><tr><th>成員</th><th>部門</th><th>角色</th><th>直屬組長</th><th>帳號狀態</th><th>最後登入</th><th style="min-width:220px">操作</th></tr></thead>
+        <tbody>${rows.map(({ mb, p, inv, state, cls }) => `<tr>
+          <td><div class="cell-title">${U.esc(mb.name)}${mb.member_id === me().member_id ? ' <span class="chip info">你</span>' : ''}</div>
+            <div class="muted small">${U.esc(mb.member_id)}・${U.esc(mb.email || '未填 Email')}</div></td>
+          <td>${U.esc(mb.department || '—')}</td>
+          <td><span class="role-pill" style="--role:${U.ROLE_COLOR[p?.role || mb.project_role] || '#475569'}">${U.esc(p?.role || mb.project_role)}</span></td>
+          <td>${U.esc(mb.leader_id ? API.memberName(mb.leader_id) : '—')}</td>
+          <td><span class="chip ${cls}">${state}</span>${inv ? `<div class="small mono">碼：<b>${U.esc(inv.invite_code)}</b></div>` : ''}</td>
+          <td class="small">${U.dateTime(p?.last_login_at)}</td>
+          <td class="row-actions">
+            <button class="btn small outline" data-edit="${U.esc(mb.member_id)}">編輯</button>
+            ${p && mb.member_id !== me().member_id ? `<button class="btn small ghost" data-toggle="${U.esc(mb.member_id)}">${p.auth_status === '已授權' ? '停用' : '啟用'}</button>` : ''}
+            ${inv ? `<button class="btn small ghost" data-copy="${U.esc(inv.invite_code)}">複製邀請</button>
+                     <button class="btn small ghost" data-cancel-inv="${U.esc(inv.invitation_id)}">取消邀請</button>` : ''}
+            ${!p && !inv && mb.email ? `<button class="btn small ghost" data-reinvite="${U.esc(mb.member_id)}">寄出邀請</button>` : ''}
+          </td></tr>`).join('')}</tbody>
+      </table></div></div>`;
+
+    el.querySelector('#btn-invite').onclick = () => openInviteModal();
+    el.querySelectorAll('[data-edit]').forEach((b) => {
+      b.onclick = () => { const r = rows.find((x) => x.mb.member_id === b.dataset.edit); openMemberModal(r.mb, r.p); };
+    });
+    el.querySelectorAll('[data-toggle]').forEach((b) => {
+      b.onclick = async () => {
+        const r = rows.find((x) => x.mb.member_id === b.dataset.toggle);
+        const disable = r.p.auth_status === '已授權';
+        if (!(await U.confirmBox(`確定要${disable ? '停用' : '重新啟用'}「${r.mb.name}」的帳號嗎？`, disable ? '停用' : '啟用', disable))) return;
+        try {
+          await API.updateWithVersion('profiles', 'member_id', r.mb.member_id, r.p.version, { auth_status: disable ? '已停用' : '已授權' });
+          U.toast('已更新帳號狀態', 'ok'); App.renderPage();
+        } catch (e) { U.toast(e.message, 'bad', 6000); }
+      };
+    });
+    el.querySelectorAll('[data-copy]').forEach((b) => {
+      b.onclick = () => copyInvite(b.dataset.copy, siteUrl);
+    });
+    el.querySelectorAll('[data-cancel-inv]').forEach((b) => {
+      b.onclick = async () => {
+        if (!(await U.confirmBox('確定要取消這張邀請嗎？取消後邀請碼會失效。', '取消邀請', true))) return;
+        try {
+          API.check(await API.sb.from('invitations').update({ status: '已取消' }).eq('invitation_id', b.dataset.cancelInv), '取消邀請');
+          U.toast('邀請已取消', 'ok'); App.renderPage();
+        } catch (e) { U.toast(e.message, 'bad', 6000); }
+      };
+    });
+    el.querySelectorAll('[data-reinvite]').forEach((b) => {
+      b.onclick = async () => {
+        const mb = members.find((x) => x.member_id === b.dataset.reinvite);
+        try {
+          const res = API.check(await API.sb.rpc('invite_member', {
+            p_name: mb.name, p_email: mb.email, p_role: mb.project_role || '組員',
+            p_department: mb.department, p_leader_id: mb.leader_id, p_weekly_hours: mb.weekly_hours
+          }), '邀請');
+          showInviteResult(mb.name, mb.email, res[0].invite_code, siteUrl);
+        } catch (e) { U.toast(e.message, 'bad', 6000); }
+      };
+    });
+  }
+
+  function leaderOptions(selected) {
+    const leaders = (API.cache.members || []).filter((x) => ['專案經理', '組長'].includes(x.project_role));
+    return U.options(leaders.map((x) => x.member_id), selected, { blank: true, labels: Object.fromEntries(leaders.map((x) => [x.member_id, x.name])) });
+  }
+
+  function openInviteModal() {
+    const body = `
+      <form id="inv-form" class="form-grid">
+        <label>姓名<input name="name" required maxlength="40"></label>
+        <label>Email<input type="email" name="email" required placeholder="員工註冊時要用這個 Email"></label>
+        <label>角色<select name="role">${U.options(['組員', '組長', '專案經理'], '組員')}</select></label>
+        <label>部門<input name="department" maxlength="40"></label>
+        <label>直屬組長<select name="leader_id">${leaderOptions('')}</select></label>
+        <label>每週可投入工時<input type="number" name="weekly_hours" min="0" max="80" step="1" value="40"></label>
+      </form><div class="form-error" id="inv-error"></div>`;
+    const m = U.openModal({
+      title: '邀請成員', body, wide: true,
+      footer: '<span class="spacer"></span><button class="btn ghost" data-cancel>取消</button><button class="btn primary" id="btn-save">產生邀請碼</button>'
+    });
+    m.querySelector('[data-cancel]').onclick = U.closeModal;
+    m.querySelector('#btn-save').onclick = async (ev) => {
+      const form = m.querySelector('#inv-form');
+      if (!form.reportValidity()) return;
+      const f = U.formData(form);
+      ev.target.disabled = true;
+      try {
+        const res = API.check(await API.sb.rpc('invite_member', {
+          p_name: f.name, p_email: f.email, p_role: f.role, p_department: f.department || null,
+          p_leader_id: f.leader_id || null, p_weekly_hours: U.num(f.weekly_hours) || 40
+        }), '邀請成員');
+        await API.loadLookups(true);
+        showInviteResult(f.name, f.email, res[0].invite_code, location.origin + location.pathname);
+      } catch (e) { m.querySelector('#inv-error').textContent = e.message; ev.target.disabled = false; }
+    };
+  }
+
+  function inviteText(code, siteUrl, email = '') {
+    return `你被邀請加入「${me().org_name}」的專案管理平台。\n` +
+      `1. 打開 ${siteUrl}\n2. 點「註冊新帳號」，Email 請用 ${email || '被邀請的 Email'}\n` +
+      `3. 登入後選「我有邀請碼」，輸入：${code}`;
+  }
+
+  function copyInvite(code, siteUrl, email) {
+    const text = inviteText(code, siteUrl, email);
+    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject())
+      .then(() => U.toast('邀請說明已複製，可以直接貼到 LINE 或 Email', 'ok'))
+      .catch(() => U.toast('無法自動複製，請手動複製邀請碼：' + code, 'warn', 6000));
+  }
+
+  function showInviteResult(name, email, code, siteUrl) {
+    const m = U.openModal({
+      title: `已邀請 ${name}`,
+      body: `<div class="invite-code">${U.esc(code)}</div>
+        <p class="muted small">請把以下說明傳給 ${U.esc(name)}（邀請碼 30 天內有效）：</p>
+        <textarea rows="5" readonly class="mono">${U.esc(inviteText(code, siteUrl, email))}</textarea>`,
+      footer: '<span class="spacer"></span><button class="btn outline" id="btn-copy">複製說明</button><button class="btn primary" data-done>完成</button>',
+      onClose: () => App.renderPage()
+    });
+    m.querySelector('#btn-copy').onclick = () => copyInvite(code, siteUrl, email);
+    m.querySelector('[data-done]').onclick = () => { U.closeModal(); App.renderPage(); };
+  }
+
+  function openMemberModal(mb, p) {
+    const isMe = mb.member_id === me().member_id;
+    const body = `
+      <form id="mb-form" class="form-grid">
+        <label>姓名<input name="name" required maxlength="40" value="${U.esc(mb.name)}"></label>
+        <label>Email<input value="${U.esc(mb.email || '')}" disabled></label>
+        <label>部門<input name="department" maxlength="40" value="${U.esc(mb.department || '')}"></label>
+        <label>人員狀態<select name="status">${U.options(API.opts('人員狀態', ['在職', '暫停參與', '已離開']), mb.status)}</select></label>
+        <label>直屬組長<select name="leader_id">${leaderOptions(mb.leader_id)}</select></label>
+        <label>每週可投入工時<input type="number" name="weekly_hours" min="0" max="80" value="${U.esc(mb.weekly_hours ?? 40)}"></label>
+        <label>專業技能<input name="skills" maxlength="100" value="${U.esc(mb.skills || '')}"></label>
+        <label>系統角色<select name="role" ${p ? '' : 'disabled'}>${U.options(['專案經理', '組長', '組員'], p?.role || mb.project_role)}</select></label>
+        ${p ? '' : '<p class="muted small span-2">此成員尚未加入系統，角色會在接受邀請時套用。</p>'}
+        ${isMe ? '<p class="muted small span-2">提醒：公司至少要保留一位專案經理，系統不允許把最後一位專案經理降級。</p>' : ''}
+      </form><div class="form-error" id="mb-error"></div>`;
+    const m = U.openModal({
+      title: `編輯成員｜${mb.name}`, body, wide: true,
+      footer: '<span class="spacer"></span><button class="btn ghost" data-cancel>取消</button><button class="btn primary" id="btn-save">儲存</button>'
+    });
+    m.querySelector('[data-cancel]').onclick = U.closeModal;
+    m.querySelector('#btn-save').onclick = async (ev) => {
+      const form = m.querySelector('#mb-form');
+      if (!form.reportValidity()) return;
+      const f = U.formData(form);
+      if (f.leader_id === mb.member_id) { m.querySelector('#mb-error').textContent = '直屬組長不能是自己'; return; }
+      ev.target.disabled = true;
+      try {
+        await API.updateWithVersion('members', 'member_id', mb.member_id, mb.version, {
+          name: f.name, department: f.department || null, status: f.status, leader_id: f.leader_id || null,
+          weekly_hours: U.num(f.weekly_hours), skills: f.skills || null,
+          ...(p ? {} : { project_role: f.role || mb.project_role })
+        });
+        if (p && f.role && f.role !== p.role) {
+          await API.updateWithVersion('profiles', 'member_id', mb.member_id, p.version, { role: f.role });
+        }
+        U.toast('成員資料已更新', 'ok'); U.closeModal();
+        await API.loadLookups(true);
+        if (isMe) await App.start(); else App.renderPage();
+      } catch (e) { m.querySelector('#mb-error').textContent = e.message; ev.target.disabled = false; }
+    };
+  }
+
+  // =====================================================================
+  // 9. 公司設定（專案經理）
+  // =====================================================================
+  async function settings(el) {
+    const org = API.check(await API.q.organization(), '讀取公司');
+    await API.loadLookups(true);
+    const rows = API.cache.settingRows || [];
+    const all = API.cache.allOptions || [];
+    const cats = [...new Set(all.map((o) => o.category))];
+
+    el.innerHTML = `
+      <div class="grid g-2">
+        <div class="card">
+          <div class="card-head"><h4>公司資料與品牌</h4></div>
+          <form id="org-form" class="form-grid">
+            <label class="span-2">公司名稱<input name="name" required maxlength="80" value="${U.esc(org.name)}"></label>
+            <label>品牌主色<input type="color" name="primary_color" value="${U.esc(org.primary_color || '#4f46e5')}"></label>
+            <label>幣別<select name="currency">${U.options(['TWD', 'USD', 'JPY', 'HKD', 'CNY', 'EUR'], org.currency)}</select></label>
+            <label class="span-2">Logo 圖片網址（https）<input name="logo_url" type="url" value="${U.esc(org.logo_url || '')}" placeholder="https://..."></label>
+            <div class="span-2 row-actions"><span class="muted small">建立於 ${U.dateTime(org.created_at)}・方案 ${U.esc(org.plan)}</span><span class="spacer"></span>
+              <button class="btn primary" type="submit">儲存公司資料</button></div>
+          </form>
+          <div class="form-error" id="org-error"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h4>預警門檻與參數</h4></div>
+          <form id="set-form">
+            <table class="table compact"><tbody>
+              ${rows.map((r) => `<tr><td><b>${U.esc(r.key)}</b><div class="muted small">${U.esc(r.description || '')}</div></td>
+                <td style="width:120px"><input name="${U.esc(r.key)}" value="${U.esc(r.value)}" data-old="${U.esc(r.value)}"></td></tr>`).join('')}
+            </tbody></table>
+            <div class="row-actions"><span class="spacer"></span><button class="btn primary" type="submit">儲存參數</button></div>
+          </form>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h4>下拉選單選項</h4><span class="muted small">點 × 停用選項；停用後既有資料不受影響</span></div>
+        <div class="opt-grid">
+          ${cats.map((cat) => `<div class="opt-box">
+            <div class="opt-title">${U.esc(cat)}</div>
+            <div class="opt-chips">${all.filter((o) => o.category === cat).map((o) => `
+              <span class="opt-chip ${o.is_active ? '' : 'off'}">${U.esc(o.value)}
+                <button title="${o.is_active ? '停用' : '啟用'}" data-cat="${U.esc(cat)}" data-val="${U.esc(o.value)}" data-on="${o.is_active ? 1 : 0}">${o.is_active ? '×' : '↺'}</button></span>`).join('')}</div>
+            <form class="opt-add" data-cat="${U.esc(cat)}"><input name="v" maxlength="20" placeholder="新增選項"><button class="btn small outline">新增</button></form>
+          </div>`).join('')}
+        </div>
+      </div>`;
+
+    el.querySelector('#org-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const f = U.formData(e.target);
+      if (f.logo_url && !/^https:\/\//.test(f.logo_url)) { el.querySelector('#org-error').textContent = 'Logo 網址必須是 https 開頭'; return; }
+      try {
+        API.check(await API.sb.from('organizations').update({
+          name: f.name, primary_color: f.primary_color, currency: f.currency, logo_url: f.logo_url || null
+        }).eq('org_id', org.org_id).select(), '儲存公司資料');
+        U.toast('公司資料已更新', 'ok');
+        await App.start();
+      } catch (err) { el.querySelector('#org-error').textContent = err.message; }
+    };
+
+    el.querySelector('#set-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const changed = [...e.target.querySelectorAll('input')].filter((i) => i.value.trim() !== i.dataset.old);
+      if (!changed.length) return U.toast('沒有變更', 'info');
+      const bad = changed.find((i) => i.value.trim() === '');
+      if (bad) return U.toast(`「${bad.name}」不可空白`, 'bad');
+      try {
+        for (const i of changed) {
+          API.check(await API.sb.from('system_settings').update({ value: i.value.trim(), updated_by: me().member_id })
+            .eq('key', i.name).select(), '儲存參數');
+        }
+        U.toast(`已更新 ${changed.length} 項參數`, 'ok');
+        App.renderPage();
+      } catch (err) { U.toast(err.message, 'bad', 6000); }
+    };
+
+    el.querySelectorAll('.opt-chip button').forEach((b) => {
+      b.onclick = async () => {
+        try {
+          API.check(await API.sb.from('option_lists').update({ is_active: b.dataset.on !== '1' })
+            .eq('category', b.dataset.cat).eq('value', b.dataset.val).select(), '更新選項');
+          App.renderPage();
+        } catch (err) { U.toast(err.message, 'bad', 6000); }
+      };
+    });
+    el.querySelectorAll('.opt-add').forEach((form) => {
+      form.onsubmit = async (e) => {
+        e.preventDefault();
+        const v = form.v.value.trim();
+        if (!v) return;
+        const cat = form.dataset.cat;
+        const exist = all.find((o) => o.category === cat && o.value === v);
+        try {
+          if (exist) {
+            API.check(await API.sb.from('option_lists').update({ is_active: true }).eq('category', cat).eq('value', v).select(), '新增選項');
+          } else {
+            const max = Math.max(0, ...all.filter((o) => o.category === cat).map((o) => o.sort_order || 0));
+            API.check(await API.sb.from('option_lists').insert({ category: cat, value: v, sort_order: max + 1 }).select(), '新增選項');
+          }
+          App.renderPage();
+        } catch (err) { U.toast(err.message, 'bad', 6000); }
+      };
+    });
+  }
+
+  return { dashboard, tasks, alerts, risks, campaigns, members, projects, accounts, settings };
 })();
