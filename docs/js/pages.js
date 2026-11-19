@@ -47,180 +47,8 @@ const Pages = (() => {
   const kTick = (v) => (Math.abs(v) >= 1000 ? (v / 1000).toLocaleString('zh-TW') + 'k' : v);
 
   // =====================================================================
-  // 1. 專案儀表板
+  // 1. 首頁改由 dashboards.js 依角色顯示；這裡保留共用的組員負荷圖
   // =====================================================================
-  async function dashboard(el) {
-    const [ovAll, tasksAll, campsAll, work, alertsAll, metricsAll] = await Promise.all([
-      API.q.projectOverview(), API.q.tasks(), API.q.campaignSummary(),
-      API.q.workload(), API.q.alerts(), API.q.metrics()
-    ]).then((rs) => rs.map((r, i) => API.check(r, ['專案總覽', '任務', '活動', '負荷', '預警', '成效'][i])));
-
-    // 還沒有任何專案：引導建立
-    const pid = API.currentProjectId();
-    if (!pid) {
-      el.innerHTML = `<div class="card welcome">
-        <h3>👋 歡迎使用！先建立第一個專案吧</h3>
-        <p class="muted">建議順序：① 建立專案 → ② 建立行銷活動 → ③ 邀請成員 → ④ 建立任務。</p>
-        <div class="row-actions">
-        ${isLeaderOrPM() ? '<a class="btn primary" href="#/projects">前往建立專案</a>' : '<p class="muted">請等待專案經理建立專案。</p>'}
-        ${isPM() ? '<a class="btn outline" href="#/accounts">邀請成員</a>' : ''}
-        </div>
-      </div>`;
-      return;
-    }
-
-    // 只看目前選擇的專案
-    const o = ovAll.find((p) => p.project_id === pid) || {};
-    const campIds = new Set(campsAll.filter((c) => c.project_id === pid).map((c) => c.campaign_id));
-    const camps = campsAll.filter((c) => campIds.has(c.campaign_id));
-    const tasks = tasksAll.filter((t) => !t.campaign_id || campIds.has(t.campaign_id));
-    const alerts = alertsAll.filter((a) => !a.campaign_id || campIds.has(a.campaign_id));
-    const metrics = metricsAll.filter((m) => campIds.has(m.campaign_id));
-    const usedRate = U.num(o.used_budget) / (U.num(o.total_budget) || 1);
-    const openAlerts = alerts.filter((a) => a.handle_status !== '已結案');
-    const highAlerts = openAlerts.filter((a) => a.alert_level === '高');
-    const myTasks = tasks.filter((t) => t.owner_id === me().member_id && !['完成', '取消'].includes(t.status));
-    const myOverdue = myTasks.filter(isOverdue);
-    const gap = U.num(o.progress_gap);
-    const health = gap <= -0.2 || U.num(o.overdue_tasks) >= 5 ? '紅' : gap <= -0.1 || U.num(o.overdue_tasks) > 0 ? '黃' : '綠';
-
-    const in7 = tasks.filter((t) => !['完成', '取消'].includes(t.status) && t.planned_end &&
-      U.daysBetween(U.today(), t.planned_end) >= 0 && U.daysBetween(U.today(), t.planned_end) <= 7);
-
-    el.innerHTML = `
-      <div class="project-head">
-        <div>
-          <div class="muted small">${U.esc(o.project_id || '')}</div>
-          <h3>${U.esc(o.name || '尚無專案資料')}</h3>
-          <div class="muted small">${U.date(o.start_date)} → ${U.date(o.planned_end_date)}・負責人 ${U.esc(o.owner_name || '—')}</div>
-        </div>
-        <div class="health ${health === '紅' ? 'bad' : health === '黃' ? 'warn' : 'ok'}">
-          <span>專案健康</span><b>${health}燈</b>
-        </div>
-      </div>
-
-      <div class="kpis">
-        <div class="kpi">
-          <div class="kpi-label">整體實際進度</div>
-          <div class="kpi-value">${U.pct(o.overall_actual_progress)}</div>
-          <div class="kpi-sub ${gap < 0 ? 'bad-text' : 'ok-text'}">預計 ${U.pct(o.overall_planned_progress)}・落差 ${gap > 0 ? '+' : ''}${U.pct(gap)}</div>
-        </div>
-        <div class="kpi">
-          <div class="kpi-label">預算使用率</div>
-          <div class="kpi-value ${usedRate > 0.9 ? 'bad-text' : ''}">${U.pct(usedRate)}</div>
-          <div class="kpi-sub">${U.money(o.used_budget)} / ${U.money(o.total_budget)}</div>
-        </div>
-        <div class="kpi">
-          <div class="kpi-label">逾期任務</div>
-          <div class="kpi-value ${U.num(o.overdue_tasks) ? 'bad-text' : ''}">${U.int(o.overdue_tasks)}</div>
-          <div class="kpi-sub">未完成 ${U.int(o.open_tasks)} 項</div>
-        </div>
-        <div class="kpi">
-          <div class="kpi-label">待處理預警</div>
-          <div class="kpi-value ${highAlerts.length ? 'bad-text' : ''}">${openAlerts.length}</div>
-          <div class="kpi-sub">高等級 ${highAlerts.length} 則</div>
-        </div>
-        <div class="kpi">
-          <div class="kpi-label">高風險／未解決問題</div>
-          <div class="kpi-value">${U.int(o.high_risks)}<span class="kpi-slash">/</span>${U.int(o.open_issues)}</div>
-          <div class="kpi-sub">風險 / 問題</div>
-        </div>
-        <div class="kpi mine">
-          <div class="kpi-label">我的進行中任務</div>
-          <div class="kpi-value">${myTasks.length}</div>
-          <div class="kpi-sub ${myOverdue.length ? 'bad-text' : ''}">其中逾期 ${myOverdue.length} 項</div>
-        </div>
-      </div>
-
-      <div class="grid g-3">
-        <div class="card"><div class="card-head"><h4>任務狀態分布</h4></div><div class="chart-box"><canvas id="c-status"></canvas></div></div>
-        <div class="card span-2"><div class="card-head"><h4>各活動預算 vs 實際支出</h4></div><div class="chart-box"><canvas id="c-budget"></canvas></div></div>
-        <div class="card span-2"><div class="card-head"><h4>每日營收與廣告花費</h4></div><div class="chart-box"><canvas id="c-trend"></canvas></div></div>
-        <div class="card"><div class="card-head"><h4>各活動 ROAS</h4><span class="muted small">目標 ${API.roasTarget()}</span></div><div class="chart-box"><canvas id="c-roas"></canvas></div></div>
-        <div class="card"><div class="card-head"><h4>組員本週負荷</h4></div><div class="chart-box"><canvas id="c-work"></canvas></div></div>
-        <div class="card">
-          <div class="card-head"><h4>待處理 AI 預警</h4><a href="#/alerts" class="small">全部 →</a></div>
-          <ul class="mini-list">
-            ${openAlerts.slice(0, 5).map((a) => `
-              <li><span class="chip ${a.alert_level === '高' ? 'bad' : a.alert_level === '中' ? 'warn' : 'ok'}">${U.esc(a.alert_level || '—')}</span>
-                <div><b>${U.esc(a.alert_type || '預警')}</b><div class="muted small">${U.esc(a.task_id || a.campaign_id || '')}・${U.dateTime(a.alert_time)}</div></div></li>`).join('')
-              || '<li class="muted">目前沒有待處理的預警 🎉</li>'}
-          </ul>
-        </div>
-        <div class="card">
-          <div class="card-head"><h4>7 天內到期任務</h4><a href="#/tasks" class="small">全部 →</a></div>
-          <ul class="mini-list">
-            ${in7.slice(0, 6).map((t) => `
-              <li>${U.light(t.risk_light)}<div><b>${U.esc(t.name)}</b>
-                <div class="muted small">${U.esc(API.memberName(t.owner_id))}・${U.date(t.planned_end)}（剩 ${U.daysBetween(U.today(), t.planned_end)} 天）</div></div>
-                ${U.progressBar(t.actual_progress, t.planned_progress)}</li>`).join('')
-              || '<li class="muted">7 天內沒有到期的任務</li>'}
-          </ul>
-        </div>
-      </div>`;
-
-    // 圖 1：任務狀態
-    const sc = U.groupCount(tasks, 'status');
-    const sKeys = Object.keys(sc);
-    if (!tasks.length) noData('c-status', '尚無任務'); else U.chart('c-status', {
-      type: 'doughnut',
-      data: { labels: sKeys, datasets: [{ data: sKeys.map((k) => sc[k]), backgroundColor: sKeys.map((k, i) => STATUS_COLOR[k] || U.PALETTE[i % 8]) }] },
-      options: baseChartOpts({ cutout: '62%' })
-    });
-
-    // 圖 2：預算 vs 支出
-    if (!camps.length) noData('c-budget', '尚無行銷活動'); else U.chart('c-budget', {
-      type: 'bar',
-      data: {
-        labels: camps.map((c) => c.name),
-        datasets: [
-          { label: '核定預算', data: camps.map((c) => U.num(c.approved_budget)), backgroundColor: '#c7d2fe' },
-          { label: '實際支出', data: camps.map((c) => U.num(c.actual_spend)),
-            backgroundColor: camps.map((c) => U.num(c.budget_usage_rate) > 1 ? '#ef4444' : '#6366f1') }
-        ]
-      },
-      options: baseChartOpts({ scales: { y: { ticks: { callback: kTick } } } })
-    });
-
-    // 圖 3：每日營收／花費
-    const byDate = {};
-    metrics.forEach((m) => {
-      const d = m.data_date;
-      byDate[d] = byDate[d] || { rev: 0, spend: 0 };
-      byDate[d].rev += U.num(m.revenue);
-      byDate[d].spend += U.num(m.ad_spend);
-    });
-    const dates = Object.keys(byDate).sort();
-    if (!dates.length) noData('c-trend', '尚無成效資料'); else U.chart('c-trend', {
-      type: 'line',
-      data: {
-        labels: dates.map((d) => d.slice(5)),
-        datasets: [
-          { label: '歸因營收', data: dates.map((d) => byDate[d].rev), borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,.12)', fill: true, tension: 0.3 },
-          { label: '廣告花費', data: dates.map((d) => byDate[d].spend), borderColor: '#f59e0b', backgroundColor: 'transparent', tension: 0.3 }
-        ]
-      },
-      options: baseChartOpts({ scales: { y: { ticks: { callback: kTick } } } })
-    });
-
-    // 圖 4：ROAS（含目標線）
-    const roasCamps = camps.filter((c) => c.roas !== null);
-    if (!roasCamps.length) noData('c-roas', '尚無廣告成效資料'); else U.chart('c-roas', {
-      data: {
-        labels: roasCamps.map((c) => c.name),
-        datasets: [
-          { type: 'bar', label: 'ROAS', data: roasCamps.map((c) => U.num(c.roas)),
-            backgroundColor: roasCamps.map((c) => U.num(c.roas) < API.roasTarget() ? '#f87171' : '#34d399') },
-          { type: 'line', label: '目標', data: roasCamps.map(() => API.roasTarget()), borderColor: '#475569', borderDash: [6, 4], pointRadius: 0 }
-        ]
-      },
-      options: baseChartOpts({ plugins: { legend: { display: false } } })
-    });
-
-    // 圖 5：組員負荷
-    drawWorkloadChart('c-work', work);
-  }
-
   function drawWorkloadChart(id, work) {
     const yellow = U.num(API.cache.settings?.['工作負荷黃色門檻'] || 0.8);
     const red = U.num(API.cache.settings?.['工作負荷紅色門檻'] || 1);
@@ -247,7 +75,7 @@ const Pages = (() => {
   // =====================================================================
   // 2. 任務管理
   // =====================================================================
-  const taskFilter = { text: '', status: '', campaign: '', owner: '', mine: false, overdue: false };
+  const taskFilter = { text: '', status: '', campaign: '', owner: '', mine: false, overdue: false, limit: 100 };
 
   async function tasks(el) {
     const [rows, collabRes] = await Promise.all([
@@ -261,15 +89,15 @@ const Pages = (() => {
 
     el.innerHTML = `
       <div class="status-strip">
-        ${statuses.map((s) => `<button class="strip-item ${taskFilter.status === s ? 'active' : ''}" data-status="${U.esc(s)}">
+        ${statuses.map((s) => `<button class="strip-item ${taskFilter.status === s ? 'active' : ''}" aria-pressed="${taskFilter.status === s}" data-status="${U.esc(s)}">
           <span class="strip-dot" style="background:${STATUS_COLOR[s] || '#94a3b8'}"></span>${U.esc(s)}<b>${counts[s] || 0}</b></button>`).join('')}
-        <button class="strip-item ${taskFilter.overdue ? 'active' : ''}" data-overdue><span class="strip-dot" style="background:#dc2626"></span>逾期<b>${overdueCount}</b></button>
+        <button class="strip-item ${taskFilter.overdue ? 'active' : ''}" aria-pressed="${taskFilter.overdue}" data-overdue><span class="strip-dot" style="background:#dc2626"></span>逾期<b>${overdueCount}</b></button>
       </div>
 
       <div class="toolbar">
-        <input type="search" id="f-text" placeholder="搜尋任務名稱或 ID" value="${U.esc(taskFilter.text)}">
-        <select id="f-campaign"><option value="">全部活動</option>${U.options((API.cache.campaigns || []).map((c) => c.campaign_id), taskFilter.campaign, { labels: Object.fromEntries((API.cache.campaigns || []).map((c) => [c.campaign_id, c.name])) })}</select>
-        <select id="f-owner"><option value="">全部負責人</option>${U.options((API.cache.members || []).map((m) => m.member_id), taskFilter.owner, { labels: Object.fromEntries((API.cache.members || []).map((m) => [m.member_id, m.name])) })}</select>
+        <input type="search" id="f-text" aria-label="搜尋任務名稱或 ID" placeholder="搜尋任務名稱或 ID" value="${U.esc(taskFilter.text)}">
+        <select id="f-campaign" aria-label="依活動篩選"><option value="">全部活動</option>${U.options((API.cache.campaigns || []).map((c) => c.campaign_id), taskFilter.campaign, { labels: Object.fromEntries((API.cache.campaigns || []).map((c) => [c.campaign_id, c.name])) })}</select>
+        <select id="f-owner" aria-label="依負責人篩選"><option value="">全部負責人</option>${U.options((API.cache.members || []).map((m) => m.member_id), taskFilter.owner, { labels: Object.fromEntries((API.cache.members || []).map((m) => [m.member_id, m.name])) })}</select>
         <label class="check"><input type="checkbox" id="f-mine" ${taskFilter.mine ? 'checked' : ''}> 只看我的</label>
         <span class="spacer"></span>
         ${isLeaderOrPM() ? '<button class="btn primary" id="btn-new-task">＋ 新增任務</button>' : ''}
@@ -302,7 +130,8 @@ const Pages = (() => {
         }
         return true;
       });
-      body.innerHTML = list.map((t) => {
+      const total = list.length;
+      body.innerHTML = list.slice(0, taskFilter.limit).map((t) => {
         const over = isOverdue(t);
         const gap = U.num(t.progress_gap);
         const editable = canEditTask(t, myCollab);
@@ -319,7 +148,13 @@ const Pages = (() => {
           <td><button class="btn small ${editable ? 'outline' : 'ghost'}">${editable ? '編輯' : '檢視'}</button></td>
         </tr>`;
       }).join('') || `<tr><td colspan="10">${emptyState('沒有符合條件的任務')}</td></tr>`;
+      // 大量資料分批顯示，避免一次畫出過多列造成卡頓
+      if (total > taskFilter.limit) {
+        body.insertAdjacentHTML('beforeend', `<tr><td colspan="10" class="more-row"><button class="btn outline" id="btn-more">顯示更多（還有 ${total - taskFilter.limit} 筆）</button></td></tr>`);
+        body.querySelector('#btn-more').onclick = () => { taskFilter.limit += 100; draw(); };
+      }
 
+      U.rowsA11y(body);
       body.querySelectorAll('tr[data-id]').forEach((tr) => {
         tr.onclick = () => {
           const t = rows.find((x) => x.task_id === tr.dataset.id);
@@ -400,6 +235,23 @@ const Pages = (() => {
 
     const m = U.openModal({ title: isNew ? '新增任務' : `${t.task_id}｜${t.name}`, body, footer, wide: true });
     const form = m.querySelector('#task-form');
+
+    // 組員：不顯示不能修改的基本資料欄位，改為一張摘要卡，減少干擾、聚焦在進度回報
+    if (!lead && !isNew) {
+      let section = 0;
+      [...form.children].forEach((k) => {
+        if (k.classList.contains('form-section')) section += 1;
+        if (section === 1) k.hidden = true;
+      });
+      form.insertAdjacentHTML('afterbegin', `<div class="task-summary span-2" aria-label="任務摘要">
+        <div><span>負責人</span><b>${U.esc(API.memberName(t.owner_id))}</b></div>
+        <div><span>活動</span><b>${U.esc(API.campaignName(t.campaign_id))}</b></div>
+        <div><span>期間</span><b>${U.date(t.planned_start)} → ${U.date(t.planned_end)}</b></div>
+        <div><span>預計進度</span><b>${U.pct(t.planned_progress)}</b></div>
+        <div><span>優先級</span><b>${U.esc(t.priority || '—')}</b></div>
+        ${t.description ? `<p class="span-all">${U.esc(t.description)}</p>` : ''}
+      </div>`);
+    }
     const range = form.querySelector('[name=actual_progress]');
     range.oninput = () => { m.querySelector('#prog-label').textContent = range.value + '%'; };
     form.querySelector('[name=status]').onchange = (e) => {
@@ -540,8 +392,8 @@ const Pages = (() => {
       <div class="grid g-3">
         <div class="card span-2">
           <div class="toolbar inner">
-            <select id="a-status">${U.options(['未結案', '全部', '待處理', '處理中', '已結案'], alertFilter.status)}</select>
-            <select id="a-level"><option value="">全部等級</option>${U.options(['高', '中', '低'], alertFilter.level)}</select>
+            <select id="a-status" aria-label="依處理狀態篩選">${U.options(['未結案', '全部', '待處理', '處理中', '已結案'], alertFilter.status)}</select>
+            <select id="a-level" aria-label="依預警等級篩選"><option value="">全部等級</option>${U.options(['高', '中', '低'], alertFilter.level)}</select>
           </div>
           <div id="alert-list" class="alert-list"></div>
         </div>
@@ -709,6 +561,7 @@ const Pages = (() => {
         </table></div>
       </div>`;
 
+    U.rowsA11y(el);
     if (isLeaderOrPM()) {
       el.querySelectorAll('[data-risk]').forEach((tr) => {
         tr.onclick = () => openRiskModal(rk.find((r) => r.risk_id === tr.dataset.risk), midMin, highMin);
@@ -833,6 +686,7 @@ const Pages = (() => {
     }), { budget: 0, spend: 0, rev: 0, ad: 0, conv: 0 });
 
     el.innerHTML = `
+      ${isLeaderOrPM() ? '<div class="section-head"><span class="muted small">點選活動卡片可編輯</span><button class="btn primary" id="btn-new-camp">＋ 新增活動</button></div>' : ''}
       <div class="kpis small-kpis">
         <div class="kpi"><div class="kpi-label">活動數</div><div class="kpi-value">${camps.length}</div></div>
         <div class="kpi"><div class="kpi-label">核定預算</div><div class="kpi-value">${U.money(totals.budget)}</div></div>
@@ -845,7 +699,7 @@ const Pages = (() => {
         ${camps.map((c) => {
           const rate = U.num(c.budget_usage_rate);
           const roasBad = c.roas !== null && U.num(c.roas) < API.roasTarget();
-          return `<div class="card camp">
+          return `<div class="card camp ${isLeaderOrPM() ? 'clickable-card' : ''}" data-camp-card="${U.esc(c.campaign_id)}">
             <div class="camp-head"><div><b>${U.esc(c.name)}</b><div class="muted small">${U.esc(c.campaign_id)}・${U.date(c.planned_start)} → ${U.date(c.planned_end)}</div></div>${U.chip(c.status)}</div>
             <div class="small">預算使用 ${U.money(c.actual_spend)} / ${U.money(c.approved_budget)}</div>
             <div class="pbar ${rate > 1 ? 'over' : rate >= warnRate ? 'behind' : ''}"><div class="pbar-fill" style="width:${Math.min(100, rate * 100).toFixed(1)}%"></div><span class="pbar-label">${U.pct(rate)}</span></div>
@@ -876,7 +730,21 @@ const Pages = (() => {
       data: { labels: camps.map((c) => c.name), datasets: [{ label: 'CTR', data: camps.map((c) => +(U.num(c.ctr) * 100).toFixed(2)), backgroundColor: '#0ea5e9' }] },
       options: baseChartOpts({ plugins: { legend: { display: false }, tooltip: { callbacks: { label: (x) => ` ${x.raw}%` } } }, scales: { y: { ticks: { callback: (v) => v + '%' } } } })
     });
-    void metrics; // 每日趨勢已顯示於儀表板
+    void metrics; // 每日趨勢已顯示於首頁
+
+    // 組長、專案經理可以直接在這裡新增或編輯活動（不必再切到其他頁面）
+    if (isLeaderOrPM()) {
+      el.querySelector('#btn-new-camp').onclick = () => openCampaignModal(null);
+      U.rowsA11y(el);
+      el.querySelectorAll('[data-camp-card]').forEach((card) => {
+        card.onclick = async () => {
+          try {
+            const row = API.check(await API.sb.from('campaigns').select('*').eq('campaign_id', card.dataset.campCard).single(), '讀取活動');
+            openCampaignModal(row);
+          } catch (e) { U.toast(e.message, 'bad'); }
+        };
+      });
+    }
   }
 
   // =====================================================================
@@ -965,6 +833,7 @@ const Pages = (() => {
       };
     });
     el.querySelectorAll('[data-use]').forEach((b) => { b.onclick = () => { API.setProject(b.dataset.use); App.refreshAll(); }; });
+    U.rowsA11y(el);
     el.querySelectorAll('[data-camp]').forEach((tr) => {
       tr.onclick = () => openCampaignModal(camps.find((c) => c.campaign_id === tr.dataset.camp));
     });
@@ -1387,5 +1256,10 @@ const Pages = (() => {
     });
   }
 
-  return { dashboard, tasks, alerts, risks, campaigns, members, projects, accounts, settings };
+  return {
+    dashboard: (el) => Dash.render(el),
+    tasks, alerts, risks, campaigns, members, projects, accounts, settings,
+    // 供 dashboards.js 共用
+    openTaskModal, drawWorkloadChart, canEditTask: (t) => canEditTask(t)
+  };
 })();
