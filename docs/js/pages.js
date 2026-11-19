@@ -1248,7 +1248,7 @@ const Pages = (() => {
         <label>每週可投入工時<input type="number" name="weekly_hours" min="0" max="80" value="${U.esc(mb.weekly_hours ?? 40)}"></label>
         <label>專業技能<input name="skills" maxlength="100" value="${U.esc(mb.skills || '')}"></label>
         <label>系統角色<select name="role" ${p ? '' : 'disabled'}>${U.options(['專案經理', '組長', '組員'], p?.role || mb.project_role)}</select></label>
-        ${p ? `<label class="check span-2"><input type="checkbox" name="is_test" ${p.is_test_account ? 'checked' : ''}> 🧪 測試帳號（可在左上角自行切換專案經理／組長／組員；正式使用前請取消）</label>`
+        ${p ? (p.is_test_account ? '<p class="muted small span-2">🧪 這是系統測試帳號（由系統管理者設定，網站上無法更改）。</p>' : '')
             : '<p class="muted small span-2">此成員尚未加入系統，角色會在接受邀請時套用。</p>'}
         ${isMe ? '<p class="muted small span-2">提醒：公司至少要保留一位專案經理，系統不允許把最後一位專案經理降級。</p>' : ''}
       </form><div class="form-error" id="mb-error"></div>`;
@@ -1269,12 +1269,8 @@ const Pages = (() => {
           weekly_hours: U.num(f.weekly_hours), skills: f.skills || null,
           ...(p ? {} : { project_role: f.role || mb.project_role })
         });
-        const isTest = !!(form.is_test && form.is_test.checked);
-        const profPatch = {};
-        if (p && f.role && f.role !== p.role) profPatch.role = f.role;
-        if (p && isTest !== !!p.is_test_account) profPatch.is_test_account = isTest;
-        if (p && Object.keys(profPatch).length) {
-          await API.updateWithVersion('profiles', 'member_id', mb.member_id, p.version, profPatch);
+        if (p && f.role && f.role !== p.role) {
+          await API.updateWithVersion('profiles', 'member_id', mb.member_id, p.version, { role: f.role });
         }
         U.toast('成員資料已更新', 'ok'); U.closeModal();
         await API.loadLookups(true);
