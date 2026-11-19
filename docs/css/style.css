@@ -583,3 +583,22 @@ tr.clickable:focus-visible td { background: var(--primary-soft); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* =====================================================================
+   v4 登入頁：註冊改為下方連結、記住 Email、忘記密碼
+   ===================================================================== */
+.auth-title { font-size: 20px; margin: 20px 0 0; }
+.auth-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.auth-card label.check-inline { flex-direction: row; }
+.check-inline { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; color: var(--text); cursor: pointer; min-height: 32px; }
+.check-inline input { width: 18px; height: 18px; margin: 0; accent-color: var(--primary); }
+.link-btn { background: none; border: none; padding: 4px 2px; min-height: 32px; font: inherit; font-size: 14px; font-weight: 600; color: var(--primary); cursor: pointer; }
+.link-btn:hover { text-decoration: underline; }
+.auth-card form .form-error { min-height: 0; margin-top: -6px; }
+.auth-card form .form-error:empty { display: none; }
+.auth-switch { text-align: center; margin: 18px 0 0; font-size: 14px; color: var(--muted); }
+.auth-switch .link-btn { margin-left: 4px; }
+@media (max-width: 640px) {
+  .check-inline, .link-btn { min-height: 44px; }
+  .pw-toggle { top: 0; bottom: 0; transform: none; min-height: 44px; min-width: 52px; }
+}
