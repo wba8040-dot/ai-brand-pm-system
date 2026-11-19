@@ -5,7 +5,7 @@
  * ⚠️ 絕對不要把 service_role / Secret key 放在這裡。
  */
 window.APP_CONFIG = Object.freeze({
-  SUPABASE_URL: 'https://iozsdzbumklzbamegyol.supabase.co/rest/v1/',
+  SUPABASE_URL: 'https://iozsdzbumklzbamegyol.supabase.co',
   SUPABASE_ANON_KEY: 'sb_publishable_5KTvsVPFWFGahqohQhC6UA_JRgVwiaL',
 
   APP_NAME: 'AI 品牌行銷專案管理與成效預警系統',
