@@ -29,6 +29,7 @@ const Auth = (() => {
 
   function passwordProblem(pw, memberId = '') {
     if (pw.length < cfg.MIN_PASSWORD) return `密碼至少 ${cfg.MIN_PASSWORD} 個字元`;
+    if (/[^\x20-\x7E]/.test(pw)) return '密碼只能使用英文、數字與半形符號（請確認不是中文或全形輸入）';
     if (!/[A-Za-z]/.test(pw) || !/\d/.test(pw)) return '密碼需同時包含英文字母與數字';
     if (memberId && pw.toLowerCase() === String(memberId).toLowerCase()) return '密碼不可與員工編號相同';
     return '';
@@ -154,7 +155,7 @@ const Auth = (() => {
         </div>
       </div>`;
 
-    bindPwToggle();
+    bindCredentialInputs();
     document.querySelectorAll('.auth-card [data-mode]').forEach((b) => {
       b.onclick = () => renderLogin('', b.dataset.mode);
     });
@@ -237,7 +238,7 @@ const Auth = (() => {
           <p class="auth-switch"><button type="button" class="link-btn" id="reset-cancel">取消並登出</button></p>
         </div>
       </div>`;
-    bindPwToggle();
+    bindCredentialInputs();
     const form = document.getElementById('reset-form');
     form.querySelector('input').focus();
     document.getElementById('reset-cancel').onclick = logout;
@@ -362,7 +363,7 @@ const Auth = (() => {
         ${forced ? '<button class="btn ghost" data-out>登出</button>' : '<button class="btn ghost" data-cancel>取消</button>'}
         <button class="btn primary" id="pw-save">儲存新密碼</button>`
     });
-    bindPwToggle(m);
+    bindCredentialInputs(m);
     m.querySelector('[data-cancel]')?.addEventListener('click', U.closeModal);
     m.querySelector('[data-out]')?.addEventListener('click', () => { U.closeModal(); logout(); });
     m.querySelector('#pw-save').onclick = async (ev) => {
@@ -409,14 +410,111 @@ const Auth = (() => {
       </div>`;
   }
 
-  function bindPwToggle(scope = document) {
+  // ---------- 密碼與 Email 欄位：中文輸入法保護 ----------
+  // 網頁無法強制切換作業系統的輸入法，因此改用以下方式：
+  // 1. 「顯示密碼」不再把欄位改成一般文字欄（那會讓中文輸入法重新啟用），
+  //    欄位維持密碼欄，改在下方顯示一行明碼預覽（Chrome 不允許直接取消密碼欄的遮蔽）。
+  // 2. 全形英數（例如 ａｂｃ１２３＠）自動轉成半形。
+  // 3. 若輸入法仍組字（例如注音、拼音），組好的中文字會被移除，並提示切換方式。
+  // 4. Caps Lock 開啟時提示。
+  const toHalfWidth = (v) => v
+    .replace(/[\uFF01-\uFF5E]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/\u3000/g, ' ');
+  const NON_ASCII = /[^\x20-\x7E]/g;
+
+  function hintFor(input) {
+    const host = input.closest('.pw-field') || input;
+    let h = host.parentElement.querySelector(':scope > .ime-hint');
+    if (!h) {
+      h = document.createElement('div');
+      h.className = 'ime-hint';
+      h.setAttribute('role', 'status');
+      h.setAttribute('aria-live', 'polite');
+      host.insertAdjacentElement('afterend', h);
+    }
+    return h;
+  }
+  function showHint(input, text) {
+    const h = hintFor(input);
+    h.textContent = text;
+    h.hidden = !text;
+  }
+
+  function bindCredentialInputs(scope = document) {
+    // 顯示／隱藏密碼：欄位維持 password，另外顯示明碼預覽
     scope.querySelectorAll('.pw-toggle').forEach((b) => {
-      b.onclick = () => {
-        const input = b.parentElement.querySelector('input');
-        const show = input.type === 'password';
-        input.type = show ? 'text' : 'password';
-        b.textContent = show ? '隱藏' : '顯示';
+      const input = b.parentElement.querySelector('input');
+      const preview = document.createElement('div');
+      preview.className = 'pw-preview';
+      preview.hidden = true;
+      b.parentElement.insertAdjacentElement('afterend', preview);
+      const paint = () => {
+        preview.textContent = input.value ? input.value : '（尚未輸入）';
+        preview.classList.toggle('is-empty', !input.value);
       };
+      input.addEventListener('input', () => { if (!preview.hidden) paint(); });
+      b.setAttribute('aria-pressed', 'false');
+      b.setAttribute('aria-label', '顯示密碼');
+      b.onclick = () => {
+        const show = b.getAttribute('aria-pressed') !== 'true';
+        preview.hidden = !show;
+        if (show) paint();
+        b.setAttribute('aria-pressed', String(show));
+        b.setAttribute('aria-label', show ? '隱藏密碼' : '顯示密碼');
+        b.textContent = show ? '隱藏' : '顯示';
+        input.focus();
+      };
+    });
+
+    scope.querySelectorAll('input[type=password], input[type=email]').forEach((input) => {
+      if (input.dataset.imeGuard) return;
+      input.dataset.imeGuard = '1';
+      const isPw = input.type === 'password';
+      input.setAttribute('autocapitalize', 'off');
+      input.setAttribute('autocorrect', 'off');
+      input.setAttribute('spellcheck', 'false');
+      if (!isPw) input.setAttribute('inputmode', 'email');
+      let composing = false;
+      let imeWarned = false;
+
+      const clean = () => {
+        const before = input.value;
+        let v = toHalfWidth(before);
+        const converted = v !== before;
+        const hadCjk = NON_ASCII.test(v);
+        NON_ASCII.lastIndex = 0;
+        if (hadCjk) v = v.replace(NON_ASCII, '');
+        if (v !== before) {
+          queueMicrotask(() => input.dispatchEvent(new Event('input')));
+          const pos = Math.max(0, (input.selectionStart ?? v.length) - (before.length - v.length));
+          input.value = v;
+          try { input.setSelectionRange(pos, pos); } catch (e) { /* email 欄位不支援游標設定，略過 */ }
+        }
+        if (hadCjk || imeWarned) {
+          imeWarned = true;
+          showHint(input, `偵測到中文輸入法，${isPw ? '密碼' : 'Email'}只能輸入英文、數字與符號。請先切換成英文（Windows：按 Shift 或 Ctrl＋空白鍵；Mac：Control＋空白鍵）。`);
+        } else if (converted) {
+          showHint(input, '已將全形字元自動轉成半形。');
+        } else if (input.value === '') {
+          showHint(input, '');
+        }
+      };
+
+      input.addEventListener('compositionstart', () => { composing = true; });
+      input.addEventListener('compositionend', () => { composing = false; clean(); });
+      input.addEventListener('input', () => { if (!composing) clean(); });
+      // 失去焦點時不清除提示：登入卡片是垂直置中的，提示消失會讓版面位移、按鈕點不到
+      input.addEventListener('blur', () => { if (!isPw) input.value = input.value.trim(); });
+      if (isPw) {
+        const caps = (e) => {
+          if (typeof e.getModifierState !== 'function') return;
+          const on = e.getModifierState('CapsLock');
+          if (imeWarned) return;
+          showHint(input, on ? '注意：Caps Lock 已開啟（大寫鎖定）。' : '');
+        };
+        input.addEventListener('keydown', caps);
+        input.addEventListener('keyup', caps);
+      }
     });
   }
 

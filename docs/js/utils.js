@@ -178,13 +178,17 @@ const U = (() => {
       if (e.target.classList.contains('modal-backdrop')) attemptClose();
     });
     // 「取消」按鈕也要經過放棄確認（捕獲階段先攔截）
+    // 沒有修改時，「取消／關閉」（data-cancel）直接關閉，不需各頁面自行綁定
     modal.addEventListener('click', (e) => {
       const c = e.target.closest('[data-cancel]');
-      if (c && dirtyCheck && formSnapshot(modal) !== initial) {
-        e.stopImmediatePropagation(); e.preventDefault();
+      if (!c) return;
+      e.stopImmediatePropagation(); e.preventDefault();
+      if (dirtyCheck && formSnapshot(modal) !== initial) {
         bar.hidden = false;
         bar.querySelector('[data-keep]').focus();
+        return;
       }
+      reallyClose();
     }, true);
     // 鍵盤：Esc 關閉、Tab 循環（掛在 document，焦點意外離開對話框時仍有效）
     if (keyHandler) document.removeEventListener('keydown', keyHandler);

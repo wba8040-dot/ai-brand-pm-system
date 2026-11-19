@@ -107,6 +107,7 @@ const API = (() => {
     issues: () => sb.from('v_issues').select('*').order('due_date', { ascending: true, nullsFirst: false }),
     campaignSummary: () => sb.from('v_campaign_summary').select('*').order('planned_start'),
     campaigns: () => sb.from('campaigns').select('*').eq('is_deleted', false).order('campaign_id'),
+    milestones: () => sb.from('milestones').select('*').eq('is_deleted', false).order('planned_end', { ascending: true, nullsFirst: false }),
     projects: () => sb.from('projects').select('*').eq('is_deleted', false).order('project_id'),
     metrics: () => sb.from('metrics').select('campaign_id,data_date,impressions,clicks,conversions,revenue,ad_spend')
       .eq('is_deleted', false).order('data_date'),

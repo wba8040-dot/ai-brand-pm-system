@@ -14,7 +14,9 @@ const App = (() => {
     team: '<circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14c2.8 0 5 2.2 5 5"/>',
     folder: '<path d="M3 6h6l2 2h10v11H3z"/>',
     users: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/>',
-    gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>'
+    gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>',
+    calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M8 3v4M16 3v4"/><path d="M7 14h4M7 17h7"/>',
+    profile: '<circle cx="12" cy="9" r="3.5"/><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M6.5 19c1-3 3-4.5 5.5-4.5s4.5 1.5 5.5 4.5"/>'
   };
   const icon = (k) => `<svg class="nav-svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[k]}</svg>`;
 
@@ -22,14 +24,22 @@ const App = (() => {
   const ROUTES = [
     { key: 'dashboard', label: '首頁',         icon: 'home',     group: '工作' },
     { key: 'tasks',     label: '任務',         icon: 'tasks',    group: '工作' },
+    { key: 'schedule',  label: '活動日程',     icon: 'calendar', group: '工作' },
     { key: 'alerts',    label: 'AI 預警',      icon: 'alert',    group: '工作' },
     { key: 'risks',     label: '風險與問題',   icon: 'risk',     group: '工作' },
     { key: 'members',   label: '組員負荷',     icon: 'team',     group: '工作', roles: ['專案經理', '組長'] },
     { key: 'campaigns', label: '行銷活動',     icon: 'campaign', group: '行銷' },
     { key: 'projects',  label: '專案管理',     icon: 'folder',   group: '管理', roles: ['專案經理', '組長'] },
     { key: 'accounts',  label: '成員與帳號',   icon: 'users',    group: '管理', roles: ['專案經理'] },
-    { key: 'settings',  label: '公司設定',     icon: 'gear',     group: '管理', roles: ['專案經理'] }
+    { key: 'settings',  label: '公司設定',     icon: 'gear',     group: '管理', roles: ['專案經理'] },
+    { key: 'profile',   label: '個人資料',     icon: 'profile',  group: '個人' }
   ];
+
+  // 獨立模組的頁面（其餘頁面在 pages.js）
+  const PAGE_MODULES = {
+    schedule: (el) => Schedule.render(el),
+    profile: (el) => Profile.render(el)
+  };
 
   let timer = null;
   let started = false;
@@ -133,6 +143,7 @@ const App = (() => {
             ${p.is_test_account ? `<label class="test-switch"><span>🧪 測試身分</span>
               <select id="test-role" aria-label="切換測試身分">${U.options(['專案經理', '組長', '組員'], p.role)}</select></label>` : ''}
             <div class="user-actions">
+              <a class="btn small ghost" href="#/profile" id="btn-profile">個人資料</a>
               <button class="btn small ghost" id="btn-pw">變更密碼</button>
               <button class="btn small outline" id="btn-logout">登出／切換帳號</button>
             </div>
@@ -164,6 +175,7 @@ const App = (() => {
     }).join('');
 
     renderProjectSwitch();
+    Profile.applySidebarAvatar();
 
     // 「跳到主要內容」：系統使用 #/ 路由，所以不能用一般錨點，改為直接移動焦點
     document.getElementById('skip-link').onclick = (e) => { e.preventDefault(); document.getElementById('page').focus(); };
@@ -234,6 +246,7 @@ const App = (() => {
     document.getElementById('sidebar-mask').classList.remove('show');
 
     if (page.dataset.route !== route.key) {
+      delete document.body.dataset.unsaved;   // 換頁後不再保留上一頁的「未儲存」狀態
       page.innerHTML = '<div class="page-loading" role="status"><div class="spinner" aria-hidden="true"></div><span>載入中…</span></div>';
     }
     page.dataset.route = route.key;
@@ -242,7 +255,7 @@ const App = (() => {
     try {
       if (reloadLookups) { await API.loadLookups(true); renderProjectSwitch(); }
       U.destroyCharts();
-      await Pages[route.key](page);
+      await (PAGE_MODULES[route.key] || Pages[route.key])(page);
       document.getElementById('last-updated').textContent = '更新於 ' + new Date().toLocaleTimeString('zh-TW', { hour12: false });
       if (focusTitle) h1.focus({ preventScroll: true });
     } catch (e) {
@@ -273,7 +286,9 @@ const App = (() => {
     timer = setInterval(() => {
       const a = document.activeElement;
       const typing = a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName);
-      if (document.visibilityState === 'visible' && !U.isModalOpen() && !typing && document.getElementById('page')) {
+      // 拖曳甘特圖中、或個人資料有未儲存修改時，也不自動重畫
+      const busy = document.body.dataset.dragging || document.body.dataset.unsaved;
+      if (document.visibilityState === 'visible' && !U.isModalOpen() && !typing && !busy && document.getElementById('page')) {
         renderPage();
       }
     }, cfg.REFRESH_SECONDS * 1000);

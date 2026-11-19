@@ -1259,7 +1259,8 @@ const Pages = (() => {
   return {
     dashboard: (el) => Dash.render(el),
     tasks, alerts, risks, campaigns, members, projects, accounts, settings,
-    // 供 dashboards.js 共用
-    openTaskModal, drawWorkloadChart, canEditTask: (t) => canEditTask(t)
+    // 供 dashboards.js、schedule.js、profile.js 共用
+    openTaskModal, openCampaignModal, drawWorkloadChart,
+    canEditTask: (t, collab) => canEditTask(t, collab || new Set())
   };
 })();
