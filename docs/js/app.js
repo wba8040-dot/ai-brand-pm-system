@@ -100,6 +100,8 @@ const App = (() => {
             <div class="user-email" title="${U.esc(p.email)}">${U.esc(p.email)}</div>
             <div class="user-sub">${U.esc(p.member_id)}${p.department ? '｜' + U.esc(p.department) : ''}
               ${p.line_bound ? '<span class="line-tag">LINE 已綁定</span>' : ''}</div>
+            ${p.is_test_account ? `<div class="test-switch"><span>🧪 測試身分</span>
+              <select id="test-role">${U.options(['專案經理', '組長', '組員'], p.role)}</select></div>` : ''}
             <div class="user-actions">
               <button class="btn small ghost" id="btn-pw">變更密碼</button>
               <button class="btn small outline" id="btn-logout">登出／切換帳號</button>
@@ -137,6 +139,21 @@ const App = (() => {
     };
     document.getElementById('btn-pw').onclick = () => Auth.renderChangePassword();
     document.getElementById('btn-refresh').onclick = () => renderPage(true);
+
+    // 測試帳號：切換角色後重新載入，用真正的權限測試各層級畫面
+    const tr = document.getElementById('test-role');
+    if (tr) tr.onchange = async () => {
+      tr.disabled = true;
+      try {
+        API.check(await API.sb.rpc('set_my_test_role', { p_role: tr.value }), '切換角色');
+        U.toast(`已切換為「${tr.value}」`, 'ok');
+        history.replaceState(null, '', location.pathname + '#/dashboard');
+        await start();
+      } catch (e) {
+        U.toast(e.message, 'bad', 6000);
+        tr.disabled = false;
+      }
+    };
 
     const sidebar = document.getElementById('sidebar');
     const mask = document.getElementById('sidebar-mask');
