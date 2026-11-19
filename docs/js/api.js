@@ -112,7 +112,7 @@ const API = (() => {
       .eq('is_deleted', false).order('data_date'),
     workload: () => sb.from('v_member_workload').select('*').order('member_id'),
     dataQuality: () => sb.from('v_data_quality').select('*'),
-    profiles: () => sb.from('profiles').select('user_id,member_id,email,role,auth_status,last_login_at,version'),
+    profiles: () => sb.from('profiles').select('user_id,member_id,email,role,auth_status,last_login_at,version,is_test_account'),
     invitations: () => sb.from('invitations').select('*').order('created_at', { ascending: false }),
     organization: () => sb.from('organizations').select('*').maybeSingle()
   };
