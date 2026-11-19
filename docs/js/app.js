@@ -55,6 +55,8 @@ const App = (() => {
       return renderFatal('無法連線到伺服器，請檢查網路後重新整理。');
     }
     if (!session) return Auth.renderLogin();
+    // 從「重設密碼信」的連結進來：先設定新密碼，再進系統
+    if (Auth.consumeRecovery()) return Auth.renderResetPassword(session.user.email);
 
     let profile;
     try {
