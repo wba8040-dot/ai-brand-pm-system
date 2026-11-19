@@ -39,6 +39,13 @@ const Pages = (() => {
     return `<div class="empty">${U.esc(text)}</div>`;
   }
 
+  // 圖表沒有資料時，改顯示提示文字
+  function noData(id, text = '尚無資料') {
+    const c = document.getElementById(id);
+    if (c && c.parentElement) c.parentElement.innerHTML = `<div class="chart-empty">${U.esc(text)}</div>`;
+  }
+  const kTick = (v) => (Math.abs(v) >= 1000 ? (v / 1000).toLocaleString('zh-TW') + 'k' : v);
+
   // =====================================================================
   // 1. 專案儀表板
   // =====================================================================
@@ -155,14 +162,14 @@ const Pages = (() => {
     // 圖 1：任務狀態
     const sc = U.groupCount(tasks, 'status');
     const sKeys = Object.keys(sc);
-    U.chart('c-status', {
+    if (!tasks.length) noData('c-status', '尚無任務'); else U.chart('c-status', {
       type: 'doughnut',
       data: { labels: sKeys, datasets: [{ data: sKeys.map((k) => sc[k]), backgroundColor: sKeys.map((k, i) => STATUS_COLOR[k] || U.PALETTE[i % 8]) }] },
       options: baseChartOpts({ cutout: '62%' })
     });
 
     // 圖 2：預算 vs 支出
-    U.chart('c-budget', {
+    if (!camps.length) noData('c-budget', '尚無行銷活動'); else U.chart('c-budget', {
       type: 'bar',
       data: {
         labels: camps.map((c) => c.name),
@@ -172,7 +179,7 @@ const Pages = (() => {
             backgroundColor: camps.map((c) => U.num(c.budget_usage_rate) > 1 ? '#ef4444' : '#6366f1') }
         ]
       },
-      options: baseChartOpts({ scales: { y: { ticks: { callback: (v) => (v / 1000) + 'k' } } } })
+      options: baseChartOpts({ scales: { y: { ticks: { callback: kTick } } } })
     });
 
     // 圖 3：每日營收／花費
@@ -184,7 +191,7 @@ const Pages = (() => {
       byDate[d].spend += U.num(m.ad_spend);
     });
     const dates = Object.keys(byDate).sort();
-    U.chart('c-trend', {
+    if (!dates.length) noData('c-trend', '尚無成效資料'); else U.chart('c-trend', {
       type: 'line',
       data: {
         labels: dates.map((d) => d.slice(5)),
@@ -193,12 +200,12 @@ const Pages = (() => {
           { label: '廣告花費', data: dates.map((d) => byDate[d].spend), borderColor: '#f59e0b', backgroundColor: 'transparent', tension: 0.3 }
         ]
       },
-      options: baseChartOpts({ scales: { y: { ticks: { callback: (v) => (v / 1000) + 'k' } } } })
+      options: baseChartOpts({ scales: { y: { ticks: { callback: kTick } } } })
     });
 
     // 圖 4：ROAS（含目標線）
     const roasCamps = camps.filter((c) => c.roas !== null);
-    U.chart('c-roas', {
+    if (!roasCamps.length) noData('c-roas', '尚無廣告成效資料'); else U.chart('c-roas', {
       data: {
         labels: roasCamps.map((c) => c.name),
         datasets: [
@@ -218,6 +225,7 @@ const Pages = (() => {
     const yellow = U.num(API.cache.settings?.['工作負荷黃色門檻'] || 0.8);
     const red = U.num(API.cache.settings?.['工作負荷紅色門檻'] || 1);
     const rows = work.filter((w) => w.status !== '已離開');
+    if (!rows.length) return noData(id, '尚無組員資料');
     U.chart(id, {
       type: 'bar',
       data: {
@@ -543,7 +551,7 @@ const Pages = (() => {
         </div>
       </div>`;
 
-    U.chart('c-alert-type', {
+    if (!typeKeys.length) noData('c-alert-type', '目前沒有未結案預警'); else U.chart('c-alert-type', {
       type: 'bar',
       data: { labels: typeKeys, datasets: [{ data: typeKeys.map((k) => types[k]), backgroundColor: '#f59e0b' }] },
       options: baseChartOpts({ indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { ticks: { precision: 0 } } } })
@@ -858,12 +866,12 @@ const Pages = (() => {
         <div class="card"><div class="card-head"><h4>各活動點擊率（CTR）</h4></div><div class="chart-box"><canvas id="c-ctr"></canvas></div></div>
       </div>`;
 
-    U.chart('c-conv', {
+    if (!camps.length) noData('c-conv', '尚無行銷活動'); else U.chart('c-conv', {
       type: 'bar',
       data: { labels: camps.map((c) => c.name), datasets: [{ label: '轉換數', data: camps.map((c) => U.num(c.conversions)), backgroundColor: U.PALETTE }] },
       options: baseChartOpts({ plugins: { legend: { display: false } } })
     });
-    U.chart('c-ctr', {
+    if (!camps.length) noData('c-ctr', '尚無行銷活動'); else U.chart('c-ctr', {
       type: 'bar',
       data: { labels: camps.map((c) => c.name), datasets: [{ label: 'CTR', data: camps.map((c) => +(U.num(c.ctr) * 100).toFixed(2)), backgroundColor: '#0ea5e9' }] },
       options: baseChartOpts({ plugins: { legend: { display: false }, tooltip: { callbacks: { label: (x) => ` ${x.raw}%` } } }, scales: { y: { ticks: { callback: (v) => v + '%' } } } })
@@ -1112,7 +1120,7 @@ const Pages = (() => {
           <td><div class="cell-title">${U.esc(mb.name)}${mb.member_id === me().member_id ? ' <span class="chip info">你</span>' : ''}</div>
             <div class="muted small">${U.esc(mb.member_id)}・${U.esc(mb.email || '未填 Email')}</div></td>
           <td>${U.esc(mb.department || '—')}</td>
-          <td><span class="role-pill" style="--role:${U.ROLE_COLOR[p?.role || mb.project_role] || '#475569'}">${U.esc(p?.role || mb.project_role)}</span></td>
+          <td><span class="role-pill" style="--role:${U.ROLE_COLOR[p?.role || mb.project_role] || '#475569'}">${U.esc(p?.role || mb.project_role)}</span>${p?.is_test_account ? ' <span class="chip warn">測試</span>' : ''}</td>
           <td>${U.esc(mb.leader_id ? API.memberName(mb.leader_id) : '—')}</td>
           <td><span class="chip ${cls}">${state}</span>${inv ? `<div class="small mono">碼：<b>${U.esc(inv.invite_code)}</b></div>` : ''}</td>
           <td class="small">${U.dateTime(p?.last_login_at)}</td>
@@ -1240,7 +1248,8 @@ const Pages = (() => {
         <label>每週可投入工時<input type="number" name="weekly_hours" min="0" max="80" value="${U.esc(mb.weekly_hours ?? 40)}"></label>
         <label>專業技能<input name="skills" maxlength="100" value="${U.esc(mb.skills || '')}"></label>
         <label>系統角色<select name="role" ${p ? '' : 'disabled'}>${U.options(['專案經理', '組長', '組員'], p?.role || mb.project_role)}</select></label>
-        ${p ? '' : '<p class="muted small span-2">此成員尚未加入系統，角色會在接受邀請時套用。</p>'}
+        ${p ? `<label class="check span-2"><input type="checkbox" name="is_test" ${p.is_test_account ? 'checked' : ''}> 🧪 測試帳號（可在左上角自行切換專案經理／組長／組員；正式使用前請取消）</label>`
+            : '<p class="muted small span-2">此成員尚未加入系統，角色會在接受邀請時套用。</p>'}
         ${isMe ? '<p class="muted small span-2">提醒：公司至少要保留一位專案經理，系統不允許把最後一位專案經理降級。</p>' : ''}
       </form><div class="form-error" id="mb-error"></div>`;
     const m = U.openModal({
@@ -1260,8 +1269,12 @@ const Pages = (() => {
           weekly_hours: U.num(f.weekly_hours), skills: f.skills || null,
           ...(p ? {} : { project_role: f.role || mb.project_role })
         });
-        if (p && f.role && f.role !== p.role) {
-          await API.updateWithVersion('profiles', 'member_id', mb.member_id, p.version, { role: f.role });
+        const isTest = !!(form.is_test && form.is_test.checked);
+        const profPatch = {};
+        if (p && f.role && f.role !== p.role) profPatch.role = f.role;
+        if (p && isTest !== !!p.is_test_account) profPatch.is_test_account = isTest;
+        if (p && Object.keys(profPatch).length) {
+          await API.updateWithVersion('profiles', 'member_id', mb.member_id, p.version, profPatch);
         }
         U.toast('成員資料已更新', 'ok'); U.closeModal();
         await API.loadLookups(true);
