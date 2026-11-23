@@ -92,6 +92,30 @@ const API = (() => {
     return rows[0];
   }
 
+  /**
+   * 軟刪除＋「復原」按鈕（8 秒內可復原；之後專案經理可在「公司設定 → 最近刪除」還原）
+   */
+  async function softDelete(table, pkCol, row, label) {
+    const after = await updateWithVersion(table, pkCol, row[pkCol], row.version, { is_deleted: true });
+    U.toast(`${label}已刪除`, 'ok', 8000, {
+      action: {
+        label: '復原',
+        onClick: async () => {
+          try {
+            await restore(table, pkCol, row[pkCol], after.version);
+            U.toast(`已復原${label}`, 'ok');
+            await loadLookups(true).catch(() => {});
+            if (typeof App !== 'undefined') App.refreshAll();
+          } catch (e) { U.toast(e.message, 'bad', 6000); }
+        }
+      }
+    });
+    return after;
+  }
+  function restore(table, pkCol, id, version) {
+    return updateWithVersion(table, pkCol, id, version, { is_deleted: false, deleted_at: null, deleted_by: null });
+  }
+
   async function insert(table, row, action = '新增') {
     return check(await sb.from(table).insert(row).select(), action)[0];
   }
@@ -121,6 +145,6 @@ const API = (() => {
   return {
     sb, configured, check, translateError, cache, loadLookups, insert,
     memberName, campaignName, projectName, opts, setting, roasTarget,
-    currentProjectId, setProject, updateWithVersion, q
+    currentProjectId, setProject, updateWithVersion, softDelete, restore, q
   };
 })();

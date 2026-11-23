@@ -675,10 +675,16 @@ const Schedule = (() => {
           return;
         }
         const r = range(delta);
-        await saveDates(item, r.s, r.e, () => {
+        const revert = () => {
           bar.style.left = `${left0}px`;
           if (item.kind !== 'milestone') bar.style.width = `${w0}px`;
-        });
+        };
+        // 放開後先確認，確認了才存；取消就彈回原位
+        bar.classList.add('pending');
+        const ok = await confirmDates(item, r.s, r.e, mode, delta);
+        bar.classList.remove('pending');
+        if (!ok) { revert(); announce(`已取消，「${item.title}」維持原日期`); return; }
+        await saveDates(item, r.s, r.e, revert);
       };
       bar.addEventListener('pointermove', onMove);
       bar.addEventListener('pointerup', onUp);
@@ -710,7 +716,7 @@ const Schedule = (() => {
     if (mode === 'move') bar.style.left = `${nudge.left0 + next * px}px`;
     else bar.style.width = `${Math.max(px, nudge.w0 + next * px)}px`;
     const r = shifted(item, mode, next);
-    announce(`${item.title}：${r.s === r.e ? r.e : r.s + ' 至 ' + r.e}（放開後自動儲存）`);
+    announce(`${item.title}：${r.s === r.e ? r.e : r.s + ' 至 ' + r.e}（停止按鍵後會請你確認）`);
     clearTimeout(nudge.timer);
     nudge.timer = setTimeout(async () => {
       const total = nudge.delta;
@@ -719,8 +725,84 @@ const Schedule = (() => {
       Object.assign(nudge, { key: null, mode: null, delta: 0 });
       if (!total) return;
       const rr = shifted(item, mode, total);
-      await saveDates(item, rr.s, rr.e, () => { bar.style.left = `${left0}px`; bar.style.width = `${w0}px`; }, { refocus: key });
+      const revert = () => { bar.style.left = `${left0}px`; bar.style.width = `${w0}px`; };
+      bar.classList.add('pending');
+      const ok = await confirmDates(item, rr.s, rr.e, mode, total);
+      bar.classList.remove('pending');
+      if (!ok) {
+        revert(); announce(`已取消，「${item.title}」維持原日期`);
+        const b = document.querySelector(`.g-bar[data-key="${key}"]`); if (b) b.focus();
+        return;
+      }
+      await saveDates(item, rr.s, rr.e, revert, { refocus: key });
     }, 800);
+  }
+
+  /**
+   * 拖曳／鍵盤調整後的確認框：顯示「原日期 → 新日期」、移動幾天、可能的衝突
+   * 回傳 Promise<boolean>；按取消、Esc、點背景都視為取消
+   */
+  function confirmDates(item, s, e, mode, delta) {
+    const kindName = { task: '任務', campaign: '行銷活動', milestone: '里程碑' }[item.kind] || '項目';
+    const fmt = (a, b) => (a === b ? U.esc(a) : `${U.esc(a)} → ${U.esc(b)}`);
+    const days = (a, b) => U.daysBetween(a, b) + 1;
+    const n = Math.abs(delta);
+    const what = mode === 'move' ? (delta > 0 ? `往後移 ${n} 天` : `往前移 ${n} 天`)
+      : mode === 'start' ? (delta > 0 ? `開始日延後 ${n} 天` : `開始日提前 ${n} 天`)
+      : (delta > 0 ? `延長 ${n} 天` : `縮短 ${n} 天`);
+
+    // 衝突提醒：超出所屬活動期間、早於前置任務完成
+    const warns = [];
+    const r = item.raw || {};
+    if (item.kind !== 'campaign' && r.campaign_id) {
+      const c = (data?.camps || []).find((x) => x.campaign_id === r.campaign_id);
+      if (c && ((c.planned_start && s < c.planned_start) || (c.planned_end && e > c.planned_end))) {
+        warns.push(`超出活動「${c.name}」期間（${U.date(c.planned_start)} ～ ${U.date(c.planned_end)}）`);
+      }
+    }
+    if (item.kind === 'task' && r.predecessor_ids) {
+      String(r.predecessor_ids).split(/[,，\s]+/).filter(Boolean).forEach((pid) => {
+        const pre = (data?.tasks || []).find((t) => t.task_id === pid.toUpperCase());
+        if (pre && pre.planned_end && s <= pre.planned_end) warns.push(`開始日早於前置任務「${pre.name}」的完成日 ${pre.planned_end}`);
+      });
+    }
+    if (item.kind === 'campaign') {
+      const inside = (data?.tasks || []).filter((t) => t.campaign_id === r.campaign_id && OPEN_TASK(t)).length;
+      if (inside) warns.push(`活動內 ${inside} 項任務的日期不會跟著移動`);
+    }
+
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (v) => { if (done) return; done = true; resolve(v); };
+      const m = U.openModal({
+        title: `確認調整${kindName}日期`,
+        dirtyCheck: false,
+        onClose: () => finish(false),
+        body: `
+          <div class="date-confirm">
+            <div class="dc-title">${U.esc(item.title)}</div>
+            <div class="dc-grid">
+              <div class="dc-col old"><span class="dc-label">原日期</span>
+                <b>${fmt(item.start, item.end)}</b><span class="muted small">共 ${days(item.start, item.end)} 天</span></div>
+              <div class="dc-arrow" aria-hidden="true">⇒</div>
+              <div class="dc-col new"><span class="dc-label">新日期</span>
+                <b>${fmt(s, e)}</b><span class="muted small">共 ${days(s, e)} 天</span></div>
+            </div>
+            <div class="dc-change">${U.esc(what)}</div>
+            ${warns.length ? `<ul class="dc-warn" role="alert">${warns.map((w) => `<li>⚠ ${U.esc(w)}</li>`).join('')}</ul>` : ''}
+            <p class="muted small">按 Enter 確認，Esc 取消。</p>
+          </div>`,
+        footer: `<span class="spacer"></span>
+          <button type="button" class="btn ghost" data-no>取消，彈回原位</button>
+          <button type="button" class="btn primary" data-yes data-no-busy>確認變更</button>`
+      });
+      m.querySelector('[data-no]').onclick = () => { U.closeModal(); finish(false); };
+      m.querySelector('[data-yes]').onclick = () => { U.closeModal(); finish(true); };
+      m.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Enter' && !ev.target.matches('[data-no]')) { ev.preventDefault(); m.querySelector('[data-yes]').click(); }
+      });
+      setTimeout(() => m.querySelector('[data-yes]').focus(), 40);
+    });
   }
 
   /** 寫入新的日期（樂觀鎖）；失敗時把長條移回原位 */
@@ -739,10 +821,6 @@ const Schedule = (() => {
       const txt = `已將「${item.title}」調整為 ${s === e ? e : s + ' ～ ' + e}`;
       U.toast(txt, 'ok');
       announce(txt);
-      if (item.kind === 'campaign') {
-        const inside = data.tasks.filter((t) => t.campaign_id === r.campaign_id && OPEN_TASK(t)).length;
-        if (inside) U.toast(`提醒：活動內的 ${inside} 項任務日期沒有跟著移動，若有超出活動期間會標示「日程衝突」。`, 'info', 6000);
-      }
       await App.renderPage();
       if (refocus) {
         const b = document.querySelector(`.g-bar[data-key="${refocus}"]`);
@@ -820,7 +898,7 @@ const Schedule = (() => {
     const can = isLeaderOrPM();
     const m0 = ms || { planned_end: presetDate || U.today(), acceptance_status: '未驗收', campaign_id: '' };
     const camps = (data?.camps || []);
-    const dis = can ? '' : 'disabled';
+    const dis = can ? '' : 'disabled title="只有組長或專案經理可以修改里程碑"';
     const body = `
       <form id="ms-form" class="form-grid" novalidate>
         <label class="span-2">里程碑名稱 <span class="req" aria-hidden="true">*</span>
@@ -840,7 +918,7 @@ const Schedule = (() => {
       <div class="form-error" id="ms-error" role="alert"></div>`;
     const m = U.openModal({
       title: isNew ? '新增里程碑' : `${m0.milestone_id}｜${m0.name}`,
-      body, wide: true, dirtyCheck: can,
+      body, wide: true, dirtyCheck: can, draftKey: can ? `milestone:${m0.milestone_id || 'new'}:${m0.version || 0}` : null,
       footer: `${!isNew && isPM() ? '<button type="button" class="btn danger ghost" id="ms-del">刪除</button>' : ''}<span class="spacer"></span>
         <button type="button" class="btn ghost" data-cancel>${can ? '取消' : '關閉'}</button>
         ${can ? `<button type="button" class="btn primary" id="ms-save">${isNew ? '建立' : '儲存'}</button>` : ''}`
@@ -877,10 +955,9 @@ const Schedule = (() => {
     };
     const del = m.querySelector('#ms-del');
     if (del) del.onclick = async () => {
-      if (!(await U.confirmBox(`確定要刪除里程碑「${m0.name}」嗎？`, '刪除', true))) return;
+      if (!(await U.confirmBox(`確定要刪除里程碑「${m0.name}」嗎？\n刪除後 8 秒內可按「復原」。`, '刪除', true))) return;
       try {
-        await API.updateWithVersion('milestones', 'milestone_id', m0.milestone_id, m0.version, { is_deleted: true });
-        U.toast('里程碑已刪除', 'ok');
+        await API.softDelete('milestones', 'milestone_id', m0, '里程碑');
         U.closeModal();
         App.renderPage();
       } catch (e) { U.toast(e.message, 'bad', 6000); }

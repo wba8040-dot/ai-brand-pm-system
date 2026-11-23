@@ -184,7 +184,7 @@ const Pages = (() => {
       planned_start: U.today(), planned_end: '', version: 0
     };
     const lead = isLeaderOrPM();
-    const dis = (cond) => (cond ? '' : 'disabled');
+    const dis = (cond) => (cond ? '' : `disabled title="${editable ? '只有組長或專案經理可以修改此欄位' : '你沒有修改這個任務的權限'}"`);
     const memberIds = (API.cache.members || []).filter((m) => m.status !== '已離開').map((m) => m.member_id);
     const memberLabels = Object.fromEntries((API.cache.members || []).map((m) => [m.member_id, `${m.name}（${m.member_id}）`]));
     const campIds = (API.cache.campaigns || []).map((c) => c.campaign_id);
@@ -233,7 +233,8 @@ const Pages = (() => {
       <button class="btn ghost" data-cancel>${editable ? '取消' : '關閉'}</button>
       ${editable ? `<button class="btn primary" id="btn-save">${isNew ? '建立任務' : '儲存'}</button>` : ''}`;
 
-    const m = U.openModal({ title: isNew ? '新增任務' : `${t.task_id}｜${t.name}`, body, footer, wide: true });
+    const m = U.openModal({ title: isNew ? '新增任務' : `${t.task_id}｜${t.name}`, body, footer, wide: true,
+      draftKey: editable ? `task:${t.task_id || 'new'}:${t.version}` : null });
     const form = m.querySelector('#task-form');
 
     // 組員：不顯示不能修改的基本資料欄位，改為一張摘要卡，減少干擾、聚焦在進度回報
@@ -287,10 +288,9 @@ const Pages = (() => {
     // 刪除（軟刪除）
     const delBtn = m.querySelector('#btn-del');
     if (delBtn) delBtn.onclick = async () => {
-      if (!(await U.confirmBox(`確定要刪除任務「${t.name}」嗎？（軟刪除，資料仍保留於異動紀錄）`, '刪除', true))) return;
+      if (!(await U.confirmBox(`確定要刪除任務「${t.name}」嗎？\n刪除後 8 秒內可按「復原」，之後可由專案經理在「公司設定 → 最近刪除」還原。`, '刪除', true))) return;
       try {
-        await API.updateWithVersion('tasks', 'task_id', t.task_id, t.version, { is_deleted: true });
-        U.toast('任務已刪除', 'ok');
+        await API.softDelete('tasks', 'task_id', t, '任務');
         App.renderPage();
       } catch (e) { U.toast(e.message, 'bad', 6000); }
     };
@@ -598,7 +598,7 @@ const Pages = (() => {
         <p class="muted small span-2">風險等級依分數（機率×影響）自動判定：≥${highMin} 高、≥${midMin} 中、其餘低。</p>
       </form><div class="form-error" id="risk-error"></div>`;
     const m = U.openModal({
-      title: isNew ? '新增風險' : `${r.risk_id}｜${r.name}`, body, wide: true,
+      title: isNew ? '新增風險' : `${r.risk_id}｜${r.name}`, body, wide: true, draftKey: `risk:${r.risk_id || 'new'}:${r.version || 0}`,
       footer: `<span class="spacer"></span><button class="btn ghost" data-cancel>取消</button><button class="btn primary" id="btn-save">${isNew ? '建立' : '儲存'}</button>`
     });
     m.querySelector('[data-cancel]').onclick = U.closeModal;
@@ -646,7 +646,7 @@ const Pages = (() => {
         <label class="span-2">解決方案<textarea name="solution" rows="3">${U.esc(i.solution || '')}</textarea></label>
       </form><div class="form-error" id="issue-error"></div>`;
     const m = U.openModal({
-      title: isNew ? '新增問題' : `${i.issue_id}｜${i.name}`, body, wide: true,
+      title: isNew ? '新增問題' : `${i.issue_id}｜${i.name}`, body, wide: true, draftKey: `issue:${i.issue_id || 'new'}:${i.version || 0}`,
       footer: `<span class="spacer"></span><button class="btn ghost" data-cancel>取消</button><button class="btn primary" id="btn-save">${isNew ? '建立' : '儲存'}</button>`
     });
     m.querySelector('[data-cancel]').onclick = U.closeModal;
@@ -788,7 +788,10 @@ const Pages = (() => {
     el.innerHTML = `
       <div class="section-head">
         <h3>專案（${ov.length}）</h3>
-        <button class="btn primary" id="btn-new-project">＋ 新增專案</button>
+        <div class="row-actions">
+          <button class="btn outline" id="btn-import" title="從 Excel、CSV、Google 試算表或 MS Project 匯入">⤒ 匯入專案檔案</button>
+          <button class="btn primary" id="btn-new-project">＋ 新增專案</button>
+        </div>
       </div>
       <div class="camp-grid">
         ${ov.map((p) => `
@@ -825,6 +828,7 @@ const Pages = (() => {
       </table></div></div>`;
 
     el.querySelector('#btn-new-project').onclick = () => openProjectModal(null);
+    el.querySelector('#btn-import').onclick = () => Importer.open();
     el.querySelector('#btn-new-campaign').onclick = () => openCampaignModal(null);
     el.querySelectorAll('[data-edit-project]').forEach((b) => {
       b.onclick = async () => {
@@ -854,7 +858,7 @@ const Pages = (() => {
         <label class="span-2">專案目標<textarea name="objective" rows="3">${U.esc(p.objective || '')}</textarea></label>
       </form><div class="form-error" id="proj-error"></div>`;
     const m = U.openModal({
-      title: isNew ? '新增專案' : `編輯專案｜${p.name}`, body, wide: true,
+      title: isNew ? '新增專案' : `編輯專案｜${p.name}`, body, wide: true, draftKey: `project:${p.project_id || 'new'}:${p.version || 0}`,
       footer: `${!isNew && isPM() ? '<button class="btn danger ghost" id="btn-del">刪除</button>' : ''}<span class="spacer"></span>
         <button class="btn ghost" data-cancel>取消</button><button class="btn primary" id="btn-save">${isNew ? '建立' : '儲存'}</button>`
     });
@@ -880,10 +884,10 @@ const Pages = (() => {
     };
     const del = m.querySelector('#btn-del');
     if (del) del.onclick = async () => {
-      if (!(await U.confirmBox(`確定要刪除專案「${p.name}」嗎？（軟刪除，活動與任務不會被刪除）`, '刪除', true))) return;
+      if (!(await U.confirmBox(`刪除專案「${p.name}」後，所有成員都看不到這個專案，專案邀請碼也會失效。\n（活動與任務資料會保留，可在「公司設定 → 最近刪除」還原）`, '刪除專案', true, { typeText: p.name }))) return;
       try {
-        await API.updateWithVersion('projects', 'project_id', p.project_id, p.version, { is_deleted: true });
-        U.toast('專案已刪除', 'ok'); App.refreshAll();
+        await API.softDelete('projects', 'project_id', p, '專案');
+        await API.loadLookups(true).catch(() => {}); App.refreshAll();
       } catch (e) { U.toast(e.message, 'bad', 6000); }
     };
   }
@@ -910,7 +914,7 @@ const Pages = (() => {
         <label class="span-2">備註<textarea name="notes" rows="2">${U.esc(c.notes || '')}</textarea></label>
       </form><div class="form-error" id="camp-error"></div>`;
     const m = U.openModal({
-      title: isNew ? '新增行銷活動' : `${c.campaign_id}｜${c.name}`, body, wide: true,
+      title: isNew ? '新增行銷活動' : `${c.campaign_id}｜${c.name}`, body, wide: true, draftKey: `campaign:${c.campaign_id || 'new'}:${c.version || 0}`,
       footer: `${!isNew && isPM() ? '<button class="btn danger ghost" id="btn-del">刪除</button>' : ''}<span class="spacer"></span>
         <button class="btn ghost" data-cancel>取消</button><button class="btn primary" id="btn-save">${isNew ? '建立' : '儲存'}</button>`
     });
@@ -932,10 +936,10 @@ const Pages = (() => {
     };
     const del = m.querySelector('#btn-del');
     if (del) del.onclick = async () => {
-      if (!(await U.confirmBox(`確定要刪除活動「${c.name}」嗎？`, '刪除', true))) return;
+      if (!(await U.confirmBox(`確定要刪除活動「${c.name}」嗎？\n刪除後 8 秒內可按「復原」。`, '刪除', true))) return;
       try {
-        await API.updateWithVersion('campaigns', 'campaign_id', c.campaign_id, c.version, { is_deleted: true });
-        U.toast('活動已刪除', 'ok'); App.refreshAll();
+        await API.softDelete('campaigns', 'campaign_id', c, '活動');
+        App.refreshAll();
       } catch (e) { U.toast(e.message, 'bad', 6000); }
     };
   }
@@ -943,15 +947,35 @@ const Pages = (() => {
   // =====================================================================
   // 8. 成員與帳號（專案經理）
   // =====================================================================
+  const siteBase = () => location.origin + location.pathname;
+  const joinLink = (code) => `${siteBase()}?join=${encodeURIComponent(code)}`;
+  const fmtCode = (c) => String(c || '').replace(/^(.{4})(.{4})$/, '$1 $2');
+
+  // 舊版資料庫沒有新函式時不讓整頁壞掉
+  async function softRpc(name, args) {
+    const { data, error } = await API.sb.rpc(name, args);
+    if (error) { console.warn(name, error); return null; }
+    return data || [];
+  }
+
   async function accounts(el) {
-    const [members, profiles, invites] = await Promise.all([
-      API.sb.from('members').select('*').eq('is_deleted', false).order('member_id'),
-      API.q.profiles(), API.q.invitations()
-    ]).then(([a, b, c]) => [API.check(a, '讀取成員'), API.check(b, '讀取帳號'), API.check(c, '讀取邀請')]);
+    const [[members, profiles, invites], requests, projInvites, projMembersRes] = await Promise.all([
+      Promise.all([
+        API.sb.from('members').select('*').eq('is_deleted', false).order('member_id'),
+        API.q.profiles(), API.q.invitations()
+      ]).then(([a, b, c]) => [API.check(a, '讀取成員'), API.check(b, '讀取帳號'), API.check(c, '讀取邀請')]),
+      softRpc('list_join_requests'),
+      softRpc('list_project_invites'),
+      API.sb.from('project_members').select('project_id,member_id')
+    ]);
+    const projMembers = projMembersRes.error ? [] : (projMembersRes.data || []);
+    const reqs = requests || [];
+    const codesReady = projInvites !== null;
 
     const profOf = (id) => profiles.find((p) => p.member_id === id);
     const inviteOf = (id) => invites.find((i) => i.member_id === id && i.status === '待接受');
-    const siteUrl = location.origin + location.pathname;
+    const projName = (pid) => (API.cache.projects || []).find((x) => x.project_id === pid)?.name
+      || (projInvites || []).find((x) => x.project_id === pid)?.project_name || pid;
 
     const rows = members.map((mb) => {
       const p = profOf(mb.member_id);
@@ -960,34 +984,78 @@ const Pages = (() => {
       if (p) { state = p.auth_status === '已授權' ? '已啟用' : '已停用'; cls = p.auth_status === '已授權' ? 'ok' : 'bad'; }
       else if (inv) { state = '邀請中'; cls = 'warn'; }
       else { state = '未邀請'; cls = 'muted'; }
-      return { mb, p, inv, state, cls };
+      const projs = projMembers.filter((x) => x.member_id === mb.member_id).map((x) => projName(x.project_id));
+      return { mb, p, inv, state, cls, projs };
     });
     const count = (s) => rows.filter((r) => r.state === s).length;
+
+    const reqHtml = reqs.length ? `
+      <div class="section-head"><h3>待審核的加入申請 <span class="chip warn">${reqs.length}</span></h3>
+        ${reqs.length > 1 ? '<button class="btn small outline" id="btn-approve-all">全部核准</button>' : ''}</div>
+      <div class="req-list">${reqs.map((r) => `
+        <div class="card req-card" data-req="${U.esc(r.request_id)}">
+          <div class="req-main">
+            <div class="cell-title">${U.esc(r.name)}${r.department ? ` <span class="muted small">・${U.esc(r.department)}</span>` : ''}</div>
+            <div class="muted small">${U.esc(r.email)}</div>
+            <div class="small">申請加入：<b>${U.esc(r.project_name || r.project_id)}</b>　<span class="muted">${U.dateTime(r.created_at)}</span></div>
+          </div>
+          <div class="req-actions">
+            <button class="btn small primary" data-approve="${U.esc(r.request_id)}">核准（組員）</button>
+            <button class="btn small ghost" data-reject="${U.esc(r.request_id)}">拒絕</button>
+          </div>
+        </div>`).join('')}</div>` : '';
+
+    const codesHtml = !codesReady
+      ? `<div class="card notice">專案邀請碼尚未啟用（資料庫需要套用 <code>project_invite_codes</code> 更新）。目前仍可使用下方「個別邀請」。</div>`
+      : !projInvites.length
+        ? `<div class="card empty">尚未建立專案。到「專案管理」新增專案後，就會自動產生邀請碼。</div>`
+        : `<div class="code-grid">${projInvites.map((c) => `
+        <div class="card code-card ${c.is_enabled ? '' : 'off'}">
+          <div class="code-head">
+            <div class="cell-title" title="${U.esc(c.project_name)}">${U.esc(c.project_name)}</div>
+            <span class="chip ${c.is_enabled ? 'ok' : 'muted'}">${c.is_enabled ? '開放加入' : '已停用'}</span>
+          </div>
+          <div class="code-value mono" aria-label="邀請碼 ${U.esc(c.invite_code.split('').join(' '))}">${U.esc(fmtCode(c.invite_code))}</div>
+          <div class="muted small">已用此碼加入 ${c.member_count} 人${c.pending_count ? `・<b class="warn-text">待審核 ${c.pending_count}</b>` : ''}${c.rotated_at ? `・${U.date(c.rotated_at)} 換過碼` : ''}</div>
+          <div class="code-actions">
+            <button class="btn small primary" data-share="${U.esc(c.project_id)}" ${c.is_enabled ? '' : 'disabled'}>${navigator.share ? '分享邀請' : '複製邀請連結'}</button>
+            <button class="btn small outline" data-copy-text="${U.esc(c.project_id)}" ${c.is_enabled ? '' : 'disabled'}>複製說明</button>
+            <button class="btn small ghost" data-rotate="${U.esc(c.project_id)}">換新碼</button>
+            <button class="btn small ghost" data-enable="${U.esc(c.project_id)}" data-on="${c.is_enabled ? '0' : '1'}">${c.is_enabled ? '停用' : '啟用'}</button>
+          </div>
+        </div>`).join('')}</div>`;
 
     el.innerHTML = `
       <div class="kpis small-kpis">
         <div class="kpi"><div class="kpi-label">成員</div><div class="kpi-value">${rows.length}</div></div>
         <div class="kpi"><div class="kpi-label">已啟用</div><div class="kpi-value ok-text">${count('已啟用')}</div></div>
-        <div class="kpi"><div class="kpi-label">邀請中</div><div class="kpi-value warn-text">${count('邀請中')}</div></div>
-        <div class="kpi"><div class="kpi-label">未邀請</div><div class="kpi-value">${count('未邀請')}</div></div>
+        <div class="kpi"><div class="kpi-label">待審核申請</div><div class="kpi-value warn-text">${reqs.length}</div></div>
+        <div class="kpi"><div class="kpi-label">個別邀請中</div><div class="kpi-value">${count('邀請中')}</div></div>
         <div class="kpi"><div class="kpi-label">已停用</div><div class="kpi-value bad-text">${count('已停用')}</div></div>
       </div>
 
+      ${reqHtml}
+
+      <div class="section-head"><h3>專案邀請碼</h3><span class="muted small">一個專案一組碼，傳給整個團隊即可</span></div>
+      ${codesHtml}
+
       <div class="card howto">
         <b>員工加入步驟：</b>
-        ① 按「邀請成員」取得 8 碼邀請碼 → ② 把網址與邀請碼傳給員工 → ③ 員工打開
-        <code>${U.esc(siteUrl)}</code>，用<b>被邀請的 Email</b> 註冊 → ④ 登入後輸入邀請碼即可加入。
+        ① 按「${navigator.share ? '分享邀請' : '複製邀請連結'}」傳到 LINE 群組 → ② 員工點連結、用自己的 Email 註冊並登入
+        → ③ 邀請碼會自動帶入，填姓名後送出申請 → ④ 你在這頁按「核准」，對方就能使用（預設為「組員」，可再調整角色）。
+        <div class="muted small" style="margin-top:6px">邀請碼不會過期；外流時按「換新碼」舊碼立即失效，或按「停用」暫停加入。需要直接指定「組長／專案經理」時，用下方「個別邀請」。</div>
       </div>
 
       <div class="section-head">
         <h3>成員清單</h3>
-        <button class="btn primary" id="btn-invite">＋ 邀請成員</button>
+        <button class="btn outline" id="btn-invite">＋ 個別邀請（可指定角色）</button>
       </div>
       <div class="card no-pad"><div class="table-wrap"><table class="table">
         <thead><tr><th>成員</th><th>部門</th><th>角色</th><th>直屬組長</th><th>帳號狀態</th><th>最後登入</th><th style="min-width:220px">操作</th></tr></thead>
-        <tbody>${rows.map(({ mb, p, inv, state, cls }) => `<tr>
+        <tbody>${rows.map(({ mb, p, inv, state, cls, projs }) => `<tr>
           <td><div class="cell-title">${U.esc(mb.name)}${mb.member_id === me().member_id ? ' <span class="chip info">你</span>' : ''}</div>
-            <div class="muted small">${U.esc(mb.member_id)}・${U.esc(mb.email || '未填 Email')}</div></td>
+            <div class="muted small">${U.esc(mb.member_id)}・${U.esc(mb.email || '未填 Email')}</div>
+            ${projs.length ? `<div class="proj-chips">${projs.map((n) => `<span class="chip">${U.esc(n)}</span>`).join('')}</div>` : ''}</td>
           <td>${U.esc(mb.department || '—')}</td>
           <td><span class="role-pill" style="--role:${U.ROLE_COLOR[p?.role || mb.project_role] || '#475569'}">${U.esc(p?.role || mb.project_role)}</span>${p?.is_test_account ? ' <span class="chip warn">測試</span>' : ''}</td>
           <td>${U.esc(mb.leader_id ? API.memberName(mb.leader_id) : '—')}</td>
@@ -1002,6 +1070,74 @@ const Pages = (() => {
           </td></tr>`).join('')}</tbody>
       </table></div></div>`;
 
+    const after = async (msg) => { if (msg) U.toast(msg, 'ok'); await API.loadLookups(true).catch(() => {}); App.updateJoinBadge(); App.renderPage(); };
+
+    // --- 加入申請 ---
+    el.querySelectorAll('[data-approve]').forEach((b) => {
+      b.onclick = async () => {
+        const r = reqs.find((x) => x.request_id === b.dataset.approve);
+        b.disabled = true;
+        try {
+          API.check(await API.sb.rpc('decide_join_request', { p_request_id: r.request_id, p_approve: true, p_note: null }), '核准');
+          await after(`已核准「${r.name}」加入 ${r.project_name || ''}`);
+        } catch (e) { U.toast(e.message, 'bad', 6000); b.disabled = false; App.renderPage(); }
+      };
+    });
+    el.querySelectorAll('[data-reject]').forEach((b) => {
+      b.onclick = () => openRejectModal(reqs.find((x) => x.request_id === b.dataset.reject), after);
+    });
+    const allBtn = el.querySelector('#btn-approve-all');
+    if (allBtn) allBtn.onclick = async () => {
+      if (!(await U.confirmBox(`確定要核准全部 ${reqs.length} 件申請嗎？所有人都會以「組員」加入。`, '全部核准'))) return;
+      allBtn.disabled = true;
+      let ok = 0; const fails = [];
+      for (const r of reqs) {
+        const { error } = await API.sb.rpc('decide_join_request', { p_request_id: r.request_id, p_approve: true, p_note: null });
+        if (error) fails.push(`${r.name}：${error.message}`); else ok += 1;
+      }
+      if (fails.length) U.toast(`已核准 ${ok} 件；${fails.length} 件失敗：${fails.join('；')}`, 'warn', 8000);
+      await after(fails.length ? '' : `已核准 ${ok} 件申請`);
+    };
+
+    // --- 專案邀請碼 ---
+    const codeOf = (pid) => (projInvites || []).find((x) => x.project_id === pid);
+    el.querySelectorAll('[data-share]').forEach((b) => {
+      b.onclick = async () => {
+        const c = codeOf(b.dataset.share);
+        const text = projectInviteText(c);
+        if (navigator.share) {
+          try { await navigator.share({ title: `加入「${c.project_name}」`, text, url: joinLink(c.invite_code) }); return; }
+          catch (e) { if (e.name === 'AbortError') return; }
+        }
+        copyText(joinLink(c.invite_code), '邀請連結已複製，貼到 LINE 群組即可');
+      };
+    });
+    el.querySelectorAll('[data-copy-text]').forEach((b) => {
+      b.onclick = () => copyText(projectInviteText(codeOf(b.dataset.copyText)), '邀請說明已複製（含連結與邀請碼）');
+    });
+    el.querySelectorAll('[data-rotate]').forEach((b) => {
+      b.onclick = async () => {
+        const c = codeOf(b.dataset.rotate);
+        if (!(await U.confirmBox(`確定要更換「${c.project_name}」的邀請碼嗎？\n舊的邀請碼與連結會立即失效，已送出的申請不受影響。`, '換新碼', true))) return;
+        try {
+          const code = API.check(await API.sb.rpc('rotate_project_invite', { p_project_id: c.project_id }), '更換邀請碼');
+          await after(`新邀請碼：${fmtCode(code)}`);
+        } catch (e) { U.toast(e.message, 'bad', 6000); }
+      };
+    });
+    el.querySelectorAll('[data-enable]').forEach((b) => {
+      b.onclick = async () => {
+        const c = codeOf(b.dataset.enable);
+        const on = b.dataset.on === '1';
+        if (!on && !(await U.confirmBox(`停用後，沒有人能再用「${c.project_name}」的邀請碼申請加入（可隨時重新啟用）。`, '停用', true))) return;
+        try {
+          API.check(await API.sb.rpc('set_project_invite_enabled', { p_project_id: c.project_id, p_enabled: on }), '設定邀請碼');
+          await after(on ? '邀請碼已啟用' : '邀請碼已停用');
+        } catch (e) { U.toast(e.message, 'bad', 6000); }
+      };
+    });
+
+    // --- 成員清單 ---
     el.querySelector('#btn-invite').onclick = () => openInviteModal();
     el.querySelectorAll('[data-edit]').forEach((b) => {
       b.onclick = () => { const r = rows.find((x) => x.mb.member_id === b.dataset.edit); openMemberModal(r.mb, r.p); };
@@ -1018,7 +1154,7 @@ const Pages = (() => {
       };
     });
     el.querySelectorAll('[data-copy]').forEach((b) => {
-      b.onclick = () => copyInvite(b.dataset.copy, siteUrl);
+      b.onclick = () => copyInvite(b.dataset.copy, siteBase());
     });
     el.querySelectorAll('[data-cancel-inv]').forEach((b) => {
       b.onclick = async () => {
@@ -1037,10 +1173,51 @@ const Pages = (() => {
             p_name: mb.name, p_email: mb.email, p_role: mb.project_role || '組員',
             p_department: mb.department, p_leader_id: mb.leader_id, p_weekly_hours: mb.weekly_hours
           }), '邀請');
-          showInviteResult(mb.name, mb.email, res[0].invite_code, siteUrl);
+          showInviteResult(mb.name, mb.email, res[0].invite_code, siteBase());
         } catch (e) { U.toast(e.message, 'bad', 6000); }
       };
     });
+  }
+
+  function projectInviteText(c) {
+    return `邀請你加入「${me().org_name}」的專案「${c.project_name}」：\n` +
+      `1. 點這個連結：${joinLink(c.invite_code)}\n` +
+      `2. 用你的 Email 註冊（已有帳號直接登入）\n` +
+      `3. 確認邀請碼 ${c.invite_code}、填姓名後送出，等專案經理核准即可使用`;
+  }
+
+  function copyText(text, okMsg) {
+    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject())
+      .then(() => U.toast(okMsg, 'ok'))
+      .catch(() => {
+        const m = U.openModal({
+          title: '請手動複製',
+          body: `<textarea rows="5" readonly class="mono" style="width:100%">${U.esc(text)}</textarea>`,
+          footer: '<span class="spacer"></span><button class="btn primary" data-done>完成</button>'
+        });
+        const ta = m.querySelector('textarea'); ta.focus(); ta.select();
+        m.querySelector('[data-done]').onclick = U.closeModal;
+      });
+  }
+
+  function openRejectModal(r, after) {
+    const m = U.openModal({
+      title: `拒絕「${r.name}」的申請`,
+      body: `<p class="muted small">${U.esc(r.email)}・申請加入 ${U.esc(r.project_name || r.project_id)}</p>
+        <label>原因（選填，對方會看到）<input name="note" maxlength="100" placeholder="例如：請改用公司信箱註冊"></label>
+        <div class="form-error" id="rej-error"></div>`,
+      footer: '<span class="spacer"></span><button class="btn ghost" data-cancel>取消</button><button class="btn danger" id="btn-rej">拒絕申請</button>'
+    });
+    m.querySelector('[data-cancel]').onclick = U.closeModal;
+    m.querySelector('input').focus();
+    m.querySelector('#btn-rej').onclick = async (ev) => {
+      ev.target.disabled = true;
+      try {
+        API.check(await API.sb.rpc('decide_join_request', { p_request_id: r.request_id, p_approve: false, p_note: m.querySelector('input').value.trim() || null }), '拒絕');
+        U.closeModal();
+        await after(`已拒絕「${r.name}」的申請`);
+      } catch (e) { m.querySelector('#rej-error').textContent = e.message; ev.target.disabled = false; }
+    };
   }
 
   function leaderOptions(selected) {
@@ -1151,6 +1328,43 @@ const Pages = (() => {
   // =====================================================================
   // 9. 公司設定（專案經理）
   // =====================================================================
+  // 公司設定 → 最近刪除（軟刪除的資料可還原）
+  const TRASH = [
+    { table: 'projects', pk: 'project_id', label: '專案' },
+    { table: 'campaigns', pk: 'campaign_id', label: '活動' },
+    { table: 'tasks', pk: 'task_id', label: '任務' },
+    { table: 'milestones', pk: 'milestone_id', label: '里程碑' }
+  ];
+  async function loadTrash(box) {
+    const since = new Date(Date.now() - 30 * 86400000).toISOString();
+    const res = await Promise.all(TRASH.map((t) => API.sb.from(t.table)
+      .select(`${t.pk},name,deleted_at,deleted_by,version`).eq('is_deleted', true)
+      .gte('deleted_at', since).order('deleted_at', { ascending: false }).limit(50)));
+    const items = [];
+    res.forEach((r, i) => (r.data || []).forEach((row) => items.push({ ...TRASH[i], row })));
+    items.sort((a, b) => String(b.row.deleted_at).localeCompare(String(a.row.deleted_at)));
+    if (!items.length) { box.innerHTML = '<div class="empty small">最近 30 天沒有刪除任何資料</div>'; return; }
+    box.innerHTML = `<div class="table-wrap"><table class="table compact">
+      <thead><tr><th>類型</th><th>名稱</th><th>刪除時間</th><th>刪除者</th><th></th></tr></thead>
+      <tbody>${items.map((it, i) => `<tr>
+        <td><span class="chip">${it.label}</span></td>
+        <td><div class="cell-title">${U.esc(it.row.name)}</div><div class="muted small">${U.esc(it.row[it.pk])}</div></td>
+        <td class="small">${U.dateTime(it.row.deleted_at)}</td>
+        <td class="small">${U.esc(API.memberName(it.row.deleted_by))}</td>
+        <td><button class="btn small outline" data-restore="${i}">還原</button></td></tr>`).join('')}</tbody></table></div>`;
+    box.querySelectorAll('[data-restore]').forEach((b) => {
+      b.onclick = async () => {
+        const it = items[Number(b.dataset.restore)];
+        try {
+          await API.restore(it.table, it.pk, it.row[it.pk], it.row.version);
+          U.toast(`已還原${it.label}「${it.row.name}」`, 'ok');
+          await API.loadLookups(true).catch(() => {});
+          App.refreshAll();
+        } catch (e) { U.toast(e.message, 'bad', 6000); }
+      };
+    });
+  }
+
   async function settings(el) {
     const org = API.check(await API.q.organization(), '讀取公司');
     await API.loadLookups(true);
@@ -1196,7 +1410,13 @@ const Pages = (() => {
             <form class="opt-add" data-cat="${U.esc(cat)}"><input name="v" maxlength="20" placeholder="新增選項"><button class="btn small outline">新增</button></form>
           </div>`).join('')}
         </div>
+      </div>
+
+      <div class="card" id="trash-card">
+        <div class="card-head"><h4>🗑 最近刪除</h4><span class="muted small">30 天內刪除的專案、活動、任務、里程碑，可在這裡還原</span></div>
+        <div id="trash-body">${UX.skeleton('table')}</div>
       </div>`;
+    loadTrash(el.querySelector('#trash-body'));
 
     el.querySelector('#org-form').onsubmit = async (e) => {
       e.preventDefault();

@@ -104,15 +104,48 @@ const U = (() => {
   }
 
   // ---------- 提示訊息（螢幕閱讀器可讀） ----------
-  function toast(msg, type = 'info', ms = 3500) {
+  /**
+   * 輕提示
+   * opts.action = { label: '復原', onClick }：附帶動作按鈕（例如刪除後可復原）
+   * 滑鼠移上去時暫停倒數；錯誤與附動作的提示有關閉鈕
+   */
+  function toast(msg, type = 'info', ms = 3500, opts = {}) {
     const root = document.getElementById('toast-root');
+    if (!root) return null;
     const t = document.createElement('div');
     t.className = `toast ${type}`;
     t.setAttribute('role', type === 'bad' ? 'alert' : 'status');
-    t.textContent = msg;
+    const text = document.createElement('span');
+    text.className = 'toast-text';
+    text.textContent = msg;
+    t.appendChild(text);
+    const life = opts.action ? Math.max(ms, 8000) : type === 'bad' ? Math.max(ms, 6000) : ms;
+    let timer = null; let left = life; let started = 0;
+    const remove = () => { clearTimeout(timer); t.classList.remove('show'); setTimeout(() => t.remove(), 300); };
+    const run = () => { started = Date.now(); timer = setTimeout(remove, left); };
+    if (opts.action) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'toast-action'; b.textContent = opts.action.label;
+      b.dataset.noBusy = '1';
+      b.onclick = async () => {
+        b.disabled = true; clearTimeout(timer);
+        try { await opts.action.onClick(); } finally { remove(); }
+      };
+      t.appendChild(b);
+    }
+    if (opts.action || type === 'bad') {
+      const x = document.createElement('button');
+      x.type = 'button'; x.className = 'toast-close'; x.setAttribute('aria-label', '關閉提示'); x.textContent = '✕';
+      x.onclick = remove;
+      t.appendChild(x);
+    }
+    t.addEventListener('mouseenter', () => { clearTimeout(timer); left -= Date.now() - started; });
+    t.addEventListener('mouseleave', () => { left = Math.max(left, 1500); run(); });
     root.appendChild(t);
+    while (root.children.length > 4) root.firstElementChild.remove();
     requestAnimationFrame(() => t.classList.add('show'));
-    setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, type === 'bad' ? Math.max(ms, 6000) : ms);
+    run();
+    return t;
   }
 
   // ---------- 對話框／抽屜 ----------
@@ -120,6 +153,50 @@ const U = (() => {
   let lastFocus = null;
   let modalSeq = 0;
   let keyHandler = null;
+  let currentDirty = null;      // 目前對話框是否有未儲存修改（給「關閉分頁」警告用）
+  let currentDraft = null;      // 目前對話框的草稿 key
+
+  // ---------- 草稿自動暫存（localStorage，7 天） ----------
+  const DRAFT_PREFIX = 'pm.draft.';
+  const DRAFT_DAYS = 7;
+  function draftStoreKey(key) {
+    const who = (typeof Auth !== 'undefined' && Auth.current()?.member_id) || 'anon';
+    return `${DRAFT_PREFIX}${who}.${key}`;
+  }
+  function formValues(root) {
+    const out = {};
+    root.querySelectorAll('input[name], select[name], textarea[name]').forEach((e) => {
+      if (e.disabled || e.type === 'password' || e.type === 'file') return;
+      out[e.name] = e.type === 'checkbox' || e.type === 'radio' ? e.checked : e.value;
+    });
+    return out;
+  }
+  function applyValues(root, vals) {
+    Object.entries(vals).forEach(([name, v]) => {
+      root.querySelectorAll(`[name="${CSS.escape(name)}"]`).forEach((e) => {
+        if (e.disabled) return;
+        if (e.type === 'checkbox' || e.type === 'radio') e.checked = !!v; else e.value = v;
+        e.dispatchEvent(new Event('input', { bubbles: true }));
+        e.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    });
+  }
+  function clearDraft(key) { try { localStorage.removeItem(draftStoreKey(key)); } catch (e) { /* ignore */ } }
+  function pruneDrafts() {
+    try {
+      Object.keys(localStorage).filter((k) => k.startsWith(DRAFT_PREFIX)).forEach((k) => {
+        const d = JSON.parse(localStorage.getItem(k) || 'null');
+        if (!d || Date.now() - d.ts > DRAFT_DAYS * 86400000) localStorage.removeItem(k);
+      });
+    } catch (e) { /* ignore */ }
+  }
+  function agoText(ts) {
+    const m = Math.round((Date.now() - ts) / 60000);
+    if (m < 1) return '剛剛';
+    if (m < 60) return `${m} 分鐘前`;
+    const h = Math.round(m / 60);
+    return h < 24 ? `${h} 小時前` : `${Math.round(h / 24)} 天前`;
+  }
 
   function formSnapshot(root) {
     return [...root.querySelectorAll('input, select, textarea')]
@@ -132,7 +209,7 @@ const U = (() => {
    * - 有修改過的表單，按背景、Esc、✕、取消時會先詢問是否放棄
    * - Tab 鍵焦點限制在對話框內，關閉後焦點回到原本的按鈕
    */
-  function openModal({ title, body, footer = '', wide = false, variant = 'modal', onClose, dirtyCheck = true }) {
+  function openModal({ title, body, footer = '', wide = false, variant = 'modal', onClose, dirtyCheck = true, draftKey = null }) {
     const root = document.getElementById('modal-root');
     if (!modalOpen) lastFocus = document.activeElement;
     const id = `modal-title-${++modalSeq}`;
@@ -156,6 +233,43 @@ const U = (() => {
     const modal = root.querySelector('.modal');
     const initial = formSnapshot(modal);
     const bar = modal.querySelector('.discard-bar');
+
+    currentDirty = dirtyCheck ? () => document.contains(modal) && formSnapshot(modal) !== initial : null;
+
+    // 草稿：輸入時自動暫存；下次開啟同一筆時可還原
+    currentDraft = draftKey;
+    if (draftKey) {
+      let saved = null;
+      try { saved = JSON.parse(localStorage.getItem(draftStoreKey(draftKey)) || 'null'); } catch (e) { /* ignore */ }
+      if (saved && Date.now() - saved.ts < DRAFT_DAYS * 86400000) {
+        const cur = formValues(modal);
+        const differs = Object.entries(saved.values).some(([k, v]) => k in cur && String(cur[k]) !== String(v));
+        if (differs) {
+          const bar2 = document.createElement('div');
+          bar2.className = 'draft-bar';
+          bar2.setAttribute('role', 'status');
+          bar2.innerHTML = `<span>📝 有一份 ${agoText(saved.ts)} 未送出的草稿</span>
+            <button type="button" class="btn small primary" data-draft-restore data-no-busy>還原草稿</button>
+            <button type="button" class="btn small ghost" data-draft-drop data-no-busy>捨棄</button>`;
+          modal.querySelector('.modal-body').prepend(bar2);
+          bar2.querySelector('[data-draft-restore]').onclick = () => { applyValues(modal, saved.values); bar2.remove(); toast('已還原草稿，確認後記得儲存', 'ok'); };
+          bar2.querySelector('[data-draft-drop]').onclick = () => { clearDraft(draftKey); bar2.remove(); };
+        } else {
+          clearDraft(draftKey);
+        }
+      }
+      let t = null;
+      modal.addEventListener('input', () => {
+        clearTimeout(t);
+        t = setTimeout(() => {
+          if (!document.contains(modal)) return;
+          try {
+            if (formSnapshot(modal) === initial) localStorage.removeItem(draftStoreKey(draftKey));
+            else localStorage.setItem(draftStoreKey(draftKey), JSON.stringify({ ts: Date.now(), values: formValues(modal) }));
+          } catch (e) { /* 空間不足等狀況略過 */ }
+        }, 600);
+      });
+    }
 
     const reallyClose = () => { closeModal(); if (onClose) onClose(); };
     const attemptClose = () => {
@@ -216,31 +330,97 @@ const U = (() => {
   function closeModal() {
     document.getElementById('modal-root').innerHTML = '';
     modalOpen = false;
+    if (currentDraft) { clearDraft(currentDraft); currentDraft = null; }
+    currentDirty = null;
     if (keyHandler) { document.removeEventListener('keydown', keyHandler); keyHandler = null; }
     if (lastFocus && document.contains(lastFocus)) lastFocus.focus();
     lastFocus = null;
   }
 
   function isModalOpen() { return modalOpen; }
+  function isModalDirty() { return !!(modalOpen && currentDirty && currentDirty()); }
 
   function openDrawer(opts) {
     return openModal({ ...opts, variant: 'drawer', dirtyCheck: false });
   }
 
-  // 自訂確認視窗（回傳 Promise<boolean>）
-  function confirmBox(message, okText = '確定', danger = false) {
+  /**
+   * 自訂確認視窗（回傳 Promise<boolean>）
+   * opts.typeText：不可逆的高風險操作，必須手動輸入這段文字才能按確認
+   */
+  function confirmBox(message, okText = '確定', danger = false, opts = {}) {
+    const need = opts.typeText ? String(opts.typeText) : '';
     return new Promise((resolve) => {
+      let done = false;
+      const finish = (v) => { if (done) return; done = true; resolve(v); };
       const m = openModal({
-        title: '請確認',
-        body: `<p class="confirm-text">${esc(message)}</p>`,
+        title: opts.title || (danger ? '⚠ 請確認' : '請確認'),
+        body: `<p class="confirm-text">${esc(message)}</p>
+          ${need ? `<label class="type-confirm">請輸入「<b>${esc(need)}</b>」以確認
+            <input type="text" autocomplete="off" spellcheck="false" data-type-confirm aria-describedby="tc-hint"></label>
+            <span class="muted small" id="tc-hint">輸入完全相同的文字後，確認按鈕才會解鎖。</span>` : ''}`,
         footer: `<span class="spacer"></span><button class="btn ghost" data-no>取消</button>
-                 <button class="btn ${danger ? 'danger' : 'primary'}" data-yes>${esc(okText)}</button>`,
-        onClose: () => resolve(false),
+                 <button class="btn ${danger ? 'danger' : 'primary'}" data-yes ${need ? 'disabled' : ''}>${esc(okText)}</button>`,
+        onClose: () => finish(false),
         dirtyCheck: false
       });
-      m.querySelector('[data-no]').onclick = () => { closeModal(); resolve(false); };
-      m.querySelector('[data-yes]').onclick = () => { closeModal(); resolve(true); };
-      setTimeout(() => m.querySelector('[data-no]').focus(), 40);
+      const yes = m.querySelector('[data-yes]');
+      m.querySelector('[data-no]').onclick = () => { closeModal(); finish(false); };
+      yes.onclick = () => { if (yes.disabled) return; closeModal(); finish(true); };
+      const input = m.querySelector('[data-type-confirm]');
+      if (input) {
+        input.addEventListener('input', () => { yes.disabled = input.value.trim() !== need; });
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !yes.disabled) { e.preventDefault(); yes.click(); } });
+        setTimeout(() => input.focus(), 40);
+      } else {
+        setTimeout(() => m.querySelector('[data-no]').focus(), 40);
+      }
+    });
+  }
+
+  // ---------- KPI 數字自動縮小：金額太長時（例如手機上的 NT$12,345,678）不會撐破卡片 ----------
+  // 長金額改用「萬／億」短格式：NT$123,456,789 → NT$1.23億
+  function compactNumberText(text) {
+    const m = String(text).trim().match(/^([^\d\-]*)(-?[\d,]+(?:\.\d+)?)(\D*)$/);
+    if (!m) return null;
+    const n = Number(m[2].replace(/,/g, ''));
+    if (!isFinite(n) || Math.abs(n) < 10000) return null;
+    const abs = Math.abs(n);
+    const [div, unit] = abs >= 1e12 ? [1e12, '兆'] : abs >= 1e8 ? [1e8, '億'] : [1e4, '萬'];
+    const v = n / div;
+    const str = (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2)).replace(/\.?0+$/, '');
+    return `${m[1]}${str}${unit}${m[3]}`;
+  }
+
+  function fitText(scope = document, selector = '.kpi-value', minPx = 16) {
+    scope.querySelectorAll(selector).forEach((el) => {
+      el.style.fontSize = '';
+      if (el.dataset.fullText) { el.textContent = el.dataset.fullText; delete el.dataset.fullText; el.removeAttribute('title'); }
+      if (!el.clientWidth) return;   // 尚未顯示（例如在收起的區塊內）
+      let size = parseFloat(getComputedStyle(el).fontSize) || 32;
+      let guard = 0;
+      while (el.scrollWidth > el.clientWidth + 1 && size > minPx && guard++ < 40) {
+        size -= 1;
+        el.style.fontSize = `${size}px`;
+      }
+      // 仍放不下：純數字／金額改用萬、億短格式，完整數值保留在提示文字中
+      if (el.scrollWidth > el.clientWidth + 1 && !el.children.length) {
+        const full = el.textContent.trim();
+        const short = compactNumberText(full);
+        if (short) {
+          el.dataset.fullText = full;
+          el.textContent = short;
+          el.title = full;
+          size = parseFloat(getComputedStyle(el).fontSize) || size;
+          const textW = () => { const r = document.createRange(); r.selectNodeContents(el); return r.getBoundingClientRect().width; };
+          el.style.fontSize = '';
+          const maxPx = parseFloat(getComputedStyle(el).fontSize) || 32;
+          size = minPx; el.style.fontSize = `${size}px`;
+          while (size < maxPx && guard++ < 80) { el.style.fontSize = `${size + 1}px`; if (textW() > el.clientWidth) { el.style.fontSize = `${size}px`; break; } size += 1; }
+          while (el.scrollWidth > el.clientWidth + 1 && size > minPx) { size -= 1; el.style.fontSize = `${size}px`; }
+        }
+      }
+      if (el.scrollWidth > el.clientWidth + 1 && !el.title) el.title = el.textContent.trim();
     });
   }
 
@@ -304,7 +484,7 @@ const U = (() => {
   return {
     esc, num, pct, money, int, dec, date, dateTime, today, addDays, daysBetween,
     ROLE_COLOR, chip, light, progressBar, toast,
-    openModal, openDrawer, closeModal, isModalOpen, confirmBox, rowsA11y,
-    chart, destroyCharts, PALETTE, groupCount, formData, emptyToNull, options
+    openModal, openDrawer, closeModal, isModalOpen, isModalDirty, confirmBox, rowsA11y, clearDraft, pruneDrafts,
+    chart, destroyCharts, PALETTE, groupCount, formData, emptyToNull, options, fitText
   };
 })();

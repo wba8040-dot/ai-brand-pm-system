@@ -13,5 +13,6 @@ window.APP_CONFIG = Object.freeze({
   APP_SHORT: '品牌行銷 PM',
   MIN_PASSWORD: 8,          // 密碼最少長度
   REFRESH_SECONDS: 60,      // 自動重新整理間隔（秒）
+  IDLE_MINUTES: 30,         // 閒置多久自動登出（分鐘）；登出前 2 分鐘會先倒數提醒
   ROAS_TARGET: 3.5          // 公司未設定「ROAS目標」時使用的預設值
 });

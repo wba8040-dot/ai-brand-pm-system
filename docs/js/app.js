@@ -74,12 +74,20 @@ const App = (() => {
     } catch (e) {
       return Auth.renderLogin(e.message);
     }
-    if (!profile) return Auth.renderOnboarding(session.user.email);
+    if (!profile) {
+      // 用專案邀請碼申請後，等待專案經理核准
+      const req = await Auth.loadJoinRequest();
+      if (req) return Auth.renderJoinStatus(req, session.user.email);
+      return Auth.renderOnboarding(session.user.email);
+    }
+    Auth.stopJoinPoll();
     if (profile.auth_status !== '已授權') {
       return Auth.renderBlocked('帳號已停用', `你在「${profile.org_name}」的帳號已被停用，請聯絡公司的專案經理。`);
     }
 
     applyBrand(profile);
+    U.pruneDrafts();
+    UX.touch();
     try {
       await API.loadLookups(true);
     } catch (e) {
@@ -116,6 +124,19 @@ const App = (() => {
   }
 
   // ---------- 版面 ----------
+  // 專案經理：側邊選單「成員與帳號」顯示待審核的加入申請數
+  async function updateJoinBadge() {
+    const link = document.querySelector('#nav a[data-key="accounts"]');
+    if (!link) return;
+    const { data, error } = await API.sb.rpc('list_join_requests');
+    const n = error || !data ? 0 : data.length;
+    let b = link.querySelector('.nav-count');
+    if (!n) { if (b) b.remove(); return; }
+    if (!b) { b = document.createElement('span'); b.className = 'nav-count'; link.appendChild(b); }
+    b.textContent = n > 99 ? '99+' : String(n);
+    b.setAttribute('aria-label', `${n} 件待審核的加入申請`);
+  }
+
   function renderShell() {
     const p = Auth.current();
     const color = U.ROLE_COLOR[p.role] || '#475569';
@@ -155,7 +176,10 @@ const App = (() => {
         <main class="main">
           <header class="topbar">
             <button class="icon-btn menu-btn" id="btn-menu" aria-label="開啟選單" aria-controls="sidebar" aria-expanded="false">☰</button>
-            <h1 id="page-title" tabindex="-1"></h1>
+            <div class="title-wrap">
+              <nav class="breadcrumb" id="breadcrumb" aria-label="目前位置"></nav>
+              <h1 id="page-title" tabindex="-1"></h1>
+            </div>
             <div class="topbar-right">
               <label class="sr-only" for="project-switch">切換專案</label>
               <select id="project-switch" class="project-switch"></select>
@@ -176,6 +200,7 @@ const App = (() => {
 
     renderProjectSwitch();
     Profile.applySidebarAvatar();
+    updateJoinBadge();
 
     // 「跳到主要內容」：系統使用 #/ 路由，所以不能用一般錨點，改為直接移動焦點
     document.getElementById('skip-link').onclick = (e) => { e.preventDefault(); document.getElementById('page').focus(); };
@@ -237,6 +262,16 @@ const App = (() => {
     const title = route.key === 'dashboard' ? `${Auth.current()?.role || ''}首頁` : route.label;
     const h1 = document.getElementById('page-title');
     h1.textContent = title;
+    document.title = `${title}｜${cfg.APP_SHORT}`;
+    const bc = document.getElementById('breadcrumb');
+    if (bc) {
+      const proj = ['dashboard', 'tasks', 'schedule', 'campaigns', 'alerts', 'risks', 'members'].includes(route.key)
+        ? API.projectName(API.currentProjectId()) : '';
+      bc.innerHTML = `<a href="#/dashboard">${U.esc(Auth.current()?.org_name || '首頁')}</a>
+        <span aria-hidden="true">›</span><span>${U.esc(route.group)}</span>
+        ${proj && proj !== '—' ? `<span aria-hidden="true">›</span><span class="bc-proj" title="目前專案">${U.esc(proj)}</span>` : ''}
+        <span aria-hidden="true">›</span><span aria-current="page">${U.esc(title)}</span>`;
+    }
     document.querySelectorAll('#nav a').forEach((a) => {
       const on = a.dataset.key === route.key;
       a.classList.toggle('active', on);
@@ -247,7 +282,7 @@ const App = (() => {
 
     if (page.dataset.route !== route.key) {
       delete document.body.dataset.unsaved;   // 換頁後不再保留上一頁的「未儲存」狀態
-      page.innerHTML = '<div class="page-loading" role="status"><div class="spinner" aria-hidden="true"></div><span>載入中…</span></div>';
+      page.innerHTML = UX.skeleton();
     }
     page.dataset.route = route.key;
     page.setAttribute('aria-busy', 'true');
@@ -256,6 +291,7 @@ const App = (() => {
       if (reloadLookups) { await API.loadLookups(true); renderProjectSwitch(); }
       U.destroyCharts();
       await (PAGE_MODULES[route.key] || Pages[route.key])(page);
+      U.fitText(page);
       document.getElementById('last-updated').textContent = '更新於 ' + new Date().toLocaleTimeString('zh-TW', { hour12: false });
       if (focusTitle) h1.focus({ preventScroll: true });
     } catch (e) {
@@ -291,10 +327,18 @@ const App = (() => {
       if (document.visibilityState === 'visible' && !U.isModalOpen() && !typing && !busy && document.getElementById('page')) {
         renderPage();
       }
+      if (document.visibilityState === 'visible') updateJoinBadge();
     }, cfg.REFRESH_SECONDS * 1000);
   }
 
-  return { start, renderPage, refreshAll, applyBrand };
+  // 旋轉手機或調整視窗大小時，重新調整 KPI 數字大小
+  let fitTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(fitTimer);
+    fitTimer = setTimeout(() => { const p = document.getElementById('page'); if (p) U.fitText(p); }, 150);
+  });
+
+  return { start, renderPage, refreshAll, applyBrand, updateJoinBadge };
 })();
 
 document.addEventListener('DOMContentLoaded', () => {

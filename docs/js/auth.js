@@ -85,6 +85,31 @@ const Auth = (() => {
     return m;
   }
 
+  // ---------- 邀請連結：網址帶 ?join=邀請碼 ----------
+  // 存起來（30 天），註冊／收驗證信／登入後都還能自動帶入
+  const JOIN_KEY = 'pm.joinCode';
+  (function captureJoinLink() {
+    try {
+      const url = new URL(location.href);
+      const code = (url.searchParams.get('join') || '').replace(/[^0-9A-Za-z]/g, '').toUpperCase().slice(0, 8);
+      if (!url.searchParams.has('join')) return;
+      if (code.length === 8) localStorage.setItem(JOIN_KEY, JSON.stringify({ code, ts: Date.now() }));
+      url.searchParams.delete('join');
+      history.replaceState(null, '', url.pathname + url.search + url.hash);
+    } catch (e) { /* 無法使用 localStorage 時略過 */ }
+  })();
+  function pendingJoinCode() {
+    try {
+      const v = JSON.parse(localStorage.getItem(JOIN_KEY) || 'null');
+      if (v && v.code && Date.now() - v.ts < 30 * 86400000) return v.code;
+      localStorage.removeItem(JOIN_KEY);
+    } catch (e) { /* ignore */ }
+    return '';
+  }
+  function clearJoinCode() {
+    try { localStorage.removeItem(JOIN_KEY); } catch (e) { /* ignore */ }
+  }
+
   // ---------- 登入／註冊／忘記密碼 ----------
   // mode: 'login' | 'signup' | 'forgot'
   function renderLogin(message = '', mode = 'login') {
@@ -149,9 +174,11 @@ const Auth = (() => {
                 ? '已經有帳號？<button type="button" class="link-btn" data-mode="login">返回登入</button>'
                 : '<button type="button" class="link-btn" data-mode="login">← 返回登入</button>'}
           </p>
-          ${isForgot ? '' : `<p class="auth-hint">${isSignup
+          ${isForgot ? '' : pendingJoinCode()
+            ? `<p class="auth-hint join-hint">🔗 你是用<b>邀請連結</b>進來的（邀請碼 <b class="mono">${U.esc(pendingJoinCode())}</b>）。${isSignup ? '註冊並登入後會自動帶入。' : '還沒有帳號請先註冊；登入後會自動帶入邀請碼。'}</p>`
+            : `<p class="auth-hint">${isSignup
             ? '註冊後可以「建立新公司」，或輸入主管提供的「邀請碼」加入公司。'
-            : '員工請先用公司 Email 註冊帳號，再輸入專案經理提供的邀請碼。'}</p>`}
+            : '員工請先用公司 Email 註冊帳號，再輸入專案經理提供的邀請碼或打開邀請連結。'}</p>`}
         </div>
       </div>`;
 
@@ -266,16 +293,26 @@ const Auth = (() => {
     };
   }
 
-  // ---------- 登入後還沒有公司：建立公司 或 輸入邀請碼 ----------
+  // ---------- 登入後還沒有公司：用邀請碼加入 或 建立公司 ----------
   function renderOnboarding(email) {
-    document.getElementById('app').innerHTML = `
-      <div class="auth-wrap">
-        <div class="onboard">
-          <div class="onboard-head">
-            <h2>歡迎！接下來要做什麼？</h2>
-            <p class="muted">目前登入：${U.esc(email)}　<a href="#" id="btn-out">登出</a></p>
-          </div>
-          <div class="onboard-grid">
+    const linkCode = pendingJoinCode();
+    const joinCard = `
+            <div class="auth-card join-card${linkCode ? ' highlight' : ''}">
+              <h3>✉️ 我有邀請碼／邀請連結</h3>
+              <p class="muted small">輸入專案經理給你的 8 碼邀請碼。專案邀請碼送出後，需等專案經理核准。</p>
+              <form id="code-form" novalidate>
+                <label>邀請碼<input name="code" required maxlength="12" autocomplete="off" autocapitalize="characters"
+                  spellcheck="false" placeholder="例如：K7P3XQ9M" class="code-input" value="${U.esc(linkCode)}"></label>
+                <div class="join-preview" id="join-preview" aria-live="polite"></div>
+                <div class="join-extra" id="join-extra" hidden>
+                  <label>你的姓名<input name="name" maxlength="40" autocomplete="name" placeholder="專案經理會看到這個名字"></label>
+                  <label>所屬部門<input name="department" maxlength="40" placeholder="可留空"></label>
+                </div>
+                <div class="form-error" id="code-error" role="alert"></div>
+                <button class="btn primary block" type="submit">加入</button>
+              </form>
+            </div>`;
+    const orgCard = `
             <div class="auth-card">
               <h3>🏢 建立新公司</h3>
               <p class="muted small">你會成為這家公司的第一位「專案經理」，之後可以邀請同事加入。</p>
@@ -285,19 +322,19 @@ const Auth = (() => {
                 <label>所屬部門<input name="dept" maxlength="40" placeholder="可留空"></label>
                 <label>第一個專案名稱<input name="project" maxlength="80" placeholder="例如：2026 秋冬整合行銷"></label>
                 <div class="form-error" id="org-error"></div>
-                <button class="btn primary block" type="submit">建立公司</button>
+                <button class="btn outline block" type="submit">建立公司</button>
               </form>
-            </div>
-            <div class="auth-card">
-              <h3>✉️ 我有邀請碼</h3>
-              <p class="muted small">請向公司的專案經理索取 8 碼邀請碼。註冊用的 Email 必須和被邀請的 Email 相同。</p>
-              <form id="code-form">
-                <label>邀請碼<input name="code" required maxlength="8" placeholder="例如：B809D65F" style="text-transform:uppercase;letter-spacing:2px"></label>
-                <div class="form-error" id="code-error"></div>
-                <button class="btn outline block" type="submit">加入公司</button>
-              </form>
-            </div>
+            </div>`;
+
+    document.getElementById('app').innerHTML = `
+      <div class="auth-wrap">
+        <div class="onboard">
+          <div class="onboard-head">
+            <h2>歡迎！接下來要做什麼？</h2>
+            <p class="muted">目前登入：${U.esc(email)}　<a href="#" id="btn-out">登出</a></p>
+            ${UX.stepper(['註冊並登入', '輸入邀請碼', '專案經理核准', '開始使用'], 1)}
           </div>
+          <div class="onboard-grid">${joinCard}${orgCard}</div>
         </div>
       </div>`;
 
@@ -313,6 +350,7 @@ const Auth = (() => {
         API.check(await API.sb.rpc('create_organization', {
           p_org_name: f.org, p_member_name: f.name, p_department: f.dept || null, p_project_name: f.project || null
         }), '建立公司');
+        clearJoinCode();
         U.toast('公司建立完成！', 'ok');
         await App.start();
       } catch (err) {
@@ -322,23 +360,148 @@ const Auth = (() => {
       }
     };
 
+    // --- 邀請碼：輸滿 8 碼自動查詢是哪家公司／哪個專案 ---
     const codeForm = document.getElementById('code-form');
+    const codeInput = codeForm.elements.namedItem('code');
+    const preview = document.getElementById('join-preview');
+    const extra = document.getElementById('join-extra');
+    const errBox = document.getElementById('code-error');
+    const nameInput = codeForm.elements.namedItem('name');
+    let kind = '';          // 'personal' | 'project' | ''
+    let lookupSeq = 0;
+    const clean = (v) => String(v || '').replace(/[！-～]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+      .replace(/[^0-9A-Za-z]/g, '').toUpperCase().slice(0, 8);
+
+    async function lookup() {
+      const code = clean(codeInput.value);
+      kind = ''; extra.hidden = true; errBox.textContent = '';
+      if (code.length < 8) { preview.innerHTML = ''; return; }
+      const seq = ++lookupSeq;
+      preview.innerHTML = '<span class="muted small">查詢中…</span>';
+      const { data, error } = await API.sb.rpc('preview_join_code', { p_code: code });
+      if (seq !== lookupSeq) return;
+      if (error || !data || !data.length) {
+        preview.innerHTML = `<div class="join-target bad">${U.esc(error ? error.message : '邀請碼錯誤或已失效')}</div>`;
+        return;
+      }
+      const r = data[0];
+      kind = r.kind;
+      preview.innerHTML = r.kind === 'project'
+        ? `<div class="join-target"><span class="muted small">即將申請加入</span><b>${U.esc(r.org_name)}</b><span>專案：${U.esc(r.project_name)}</span></div>`
+        : `<div class="join-target"><span class="muted small">即將加入</span><b>${U.esc(r.org_name)}</b><span>個人邀請，送出後立即加入</span></div>`;
+      extra.hidden = r.kind !== 'project';
+      if (r.kind === 'project' && !nameInput.value) nameInput.focus();
+    }
+    codeInput.addEventListener('input', () => {
+      const pos = codeInput.selectionStart;
+      const before = codeInput.value;
+      const v = clean(before);
+      if (v !== before) { codeInput.value = v; try { codeInput.setSelectionRange(Math.min(pos, v.length), Math.min(pos, v.length)); } catch (e) { /* ignore */ } }
+      lookup();
+    });
+    if (codeInput.value) lookup(); else codeInput.focus();
+
     codeForm.onsubmit = async (e) => {
       e.preventDefault();
-      const btn = codeForm.querySelector('button');
-      btn.disabled = true; btn.textContent = '加入中…';
+      const code = clean(codeInput.value);
+      errBox.textContent = '';
+      if (code.length !== 8) { errBox.textContent = '邀請碼是 8 碼英數字'; return codeInput.focus(); }
+      if (!kind) await lookup();
+      if (!kind) { errBox.textContent = errBox.textContent || '邀請碼錯誤或已失效'; return; }
+      const name = String(nameInput.value || '').trim();
+      if (kind === 'project' && !name) { errBox.textContent = '請填寫你的姓名'; return nameInput.focus(); }
+      const btn = codeForm.querySelector('button[type=submit]');
+      btn.disabled = true; btn.textContent = '送出中…';
       try {
-        const orgName = API.check(await API.sb.rpc('claim_invitation', { p_code: U.formData(codeForm).code }), '加入公司');
-        U.toast(`已加入「${orgName}」`, 'ok');
-        await App.start();
+        const rows = API.check(await API.sb.rpc('join_with_code', {
+          p_code: code, p_name: name || null, p_department: String(codeForm.elements.namedItem('department').value || '').trim() || null
+        }), '加入');
+        clearJoinCode();
+        const r = rows[0];
+        if (r.status === '已加入') {
+          U.toast(`已加入「${r.org_name}」`, 'ok');
+          await App.start();
+        } else {
+          U.toast('已送出加入申請，等待專案經理核准', 'ok');
+          await App.start();
+        }
       } catch (err) {
-        document.getElementById('code-error').textContent = err.message;
-      } finally {
-        btn.disabled = false; btn.textContent = '加入公司';
+        errBox.textContent = err.message;
+        btn.disabled = false; btn.textContent = '加入';
       }
     };
   }
 
+  // ---------- 加入申請：審核中／被拒絕 ----------
+  async function loadJoinRequest() {
+    const { data, error } = await API.sb.rpc('get_my_join_request');
+    if (error) return null;               // 舊版資料庫沒有這個函式時，直接走一般流程
+    const r = data && data[0];
+    if (!r) return null;
+    try { if (r.status === '已拒絕' && sessionStorage.getItem('pm.dismissReq') === r.request_id) return null; } catch (e) { /* ignore */ }
+    return r;
+  }
+
+  let joinPoll = null;
+  function stopJoinPoll() { if (joinPoll) { clearInterval(joinPoll); joinPoll = null; } }
+
+  function renderJoinStatus(req, email) {
+    stopJoinPoll();
+    const pending = req.status === '待審核';
+    document.getElementById('app').innerHTML = `
+      <div class="auth-wrap">
+        <div class="auth-card join-status ${pending ? 'pending' : 'rejected'}">
+          ${pending ? UX.stepper(['註冊並登入', '輸入邀請碼', '專案經理核准', '開始使用'], 2) : ''}
+          <div class="join-status-icon" aria-hidden="true">${pending ? '⏳' : '✋'}</div>
+          <h2>${pending ? '加入申請審核中' : '加入申請未通過'}</h2>
+          <dl class="join-dl">
+            <dt>公司</dt><dd>${U.esc(req.org_name)}</dd>
+            <dt>專案</dt><dd>${U.esc(req.project_name || '—')}</dd>
+            <dt>申請人</dt><dd>${U.esc(req.name)}（${U.esc(email)}）</dd>
+            <dt>${pending ? '送出時間' : '處理時間'}</dt><dd>${U.dateTime(pending ? req.created_at : req.decided_at)}</dd>
+            ${!pending && req.decision_note ? `<dt>說明</dt><dd>${U.esc(req.decision_note)}</dd>` : ''}
+          </dl>
+          <p class="muted small" role="status" id="join-msg">${pending
+            ? '專案經理核准後就能使用系統。這個頁面會自動檢查，也可以按「重新檢查」。'
+            : '如有疑問請聯絡專案經理，或改用其他邀請碼。'}</p>
+          ${pending
+            ? '<button class="btn primary block" id="btn-recheck">重新檢查</button><button class="btn ghost block" id="btn-cancel-req">取消申請</button>'
+            : '<button class="btn primary block" id="btn-retry">重新輸入邀請碼</button>'}
+          <button class="btn ghost block" id="btn-out">登出</button>
+        </div>
+      </div>`;
+    document.getElementById('btn-out').onclick = () => { stopJoinPoll(); logout(); };
+
+    if (!pending) {
+      document.getElementById('btn-retry').onclick = () => {
+        try { sessionStorage.setItem('pm.dismissReq', req.request_id); } catch (e) { /* ignore */ }
+        renderOnboarding(email);
+      };
+      return;
+    }
+
+    const check = async (manual) => {
+      try {
+        const p = await loadProfile();
+        if (p) { stopJoinPoll(); U.toast('申請已核准，歡迎加入！', 'ok'); return App.start(); }
+        const r = await loadJoinRequest();
+        if (!r) { stopJoinPoll(); return App.start(); }
+        if (r.status !== '待審核') { return renderJoinStatus(r, email); }
+        if (manual) document.getElementById('join-msg').textContent = `仍在審核中（${new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })} 已檢查）`;
+      } catch (e) { if (manual) U.toast(e.message, 'bad'); }
+    };
+    document.getElementById('btn-recheck').onclick = async (ev) => {
+      ev.target.disabled = true; await check(true); if (document.body.contains(ev.target)) ev.target.disabled = false;
+    };
+    document.getElementById('btn-cancel-req').onclick = async () => {
+      if (!(await U.confirmBox('確定要取消加入申請嗎？取消後可以重新輸入邀請碼。', '取消申請', true))) return;
+      try {
+        API.check(await API.sb.rpc('cancel_my_join_request'), '取消申請');
+        stopJoinPoll(); U.toast('已取消申請', 'ok'); renderOnboarding(email);
+      } catch (e) { U.toast(e.message, 'bad'); }
+    };
+    joinPoll = setInterval(() => { if (!document.hidden) check(false); }, 20000);
+  }
   // ---------- 變更密碼 ----------
   function renderChangePassword({ forced = false } = {}) {
     const body = `
@@ -520,6 +683,7 @@ const Auth = (() => {
 
   return {
     current, loadProfile, getSession, logout, consumeRecovery,
-    renderLogin, renderResetPassword, renderOnboarding, renderChangePassword, renderBlocked, renderNotConfigured
+    renderLogin, renderResetPassword, renderOnboarding, renderChangePassword, renderBlocked, renderNotConfigured,
+    loadJoinRequest, renderJoinStatus, stopJoinPoll
   };
 })();
