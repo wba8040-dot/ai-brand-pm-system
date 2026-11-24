@@ -136,6 +136,7 @@ const Profile = (() => {
       </div>`;
 
     bind(el, m, ready);
+    AIActions.mountLineBind(el);
   }
 
   function bind(el, m, ready) {
