@@ -402,6 +402,7 @@ const Pages = (() => {
           <div class="chart-box tall"><canvas id="c-alert-type"></canvas></div>
         </div>
       </div>`;
+    AIActions.mountAlertToolbar(el, isLeaderOrPM());
 
     if (!typeKeys.length) noData('c-alert-type', '目前沒有未結案預警'); else U.chart('c-alert-type', {
       type: 'bar',
@@ -468,6 +469,7 @@ const Pages = (() => {
       footer: '<span class="spacer"></span><button class="btn ghost" data-cancel>取消</button><button class="btn primary" id="btn-save">儲存</button>'
     });
     m.querySelector('[data-cancel]').onclick = U.closeModal;
+    AIActions.mountAlertDecision(m, a, lead);
     m.querySelector('#btn-save').onclick = async (ev) => {
       const f = U.formData(m.querySelector('#alert-form'));
       const patch = { handle_status: f.handle_status, handle_result: f.handle_result || null };
