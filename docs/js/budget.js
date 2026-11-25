@@ -160,6 +160,9 @@ const Budget = (() => {
           <div class="row-actions"><button class="btn primary" id="btn-approve">核准</button>
           <button class="btn danger ghost" id="btn-reject">駁回</button></div>` : ''}
       </div>`}
+      ${isNew
+        ? '<p class="muted small">送出申請後，就可以在這筆支出上傳憑證附件。</p>'
+        : '<div class="card" id="exp-files" style="margin-top:12px"></div>'}
       <div class="form-error" id="exp-error"></div>`;
 
     const m = U.openModal({
@@ -169,6 +172,7 @@ const Budget = (() => {
     });
     const fail = (err) => { m.querySelector('#exp-error').textContent = err.message; };
     m.querySelector('[data-cancel]').onclick = U.closeModal;
+    if (!isNew) Attachments.mount(m.querySelector('#exp-files'), { businessType: '支出', businessId: e.expense_id });
 
     m.querySelector('#btn-save').onclick = async (ev) => {
       const form = m.querySelector('#exp-form');
