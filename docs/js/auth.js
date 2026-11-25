@@ -417,7 +417,8 @@ const Auth = (() => {
           p_code: code, p_name: name || null, p_department: String(codeForm.elements.namedItem('department').value || '').trim() || null
         }), '加入');
         clearJoinCode();
-        const r = rows[0];
+        const r = rows && rows[0];
+        if (!r) throw new Error('邀請碼錯誤或已失效，請向專案經理確認');
         if (r.status === '已加入') {
           U.toast(`已加入「${r.org_name}」`, 'ok');
           await App.start();

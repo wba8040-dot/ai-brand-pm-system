@@ -21,7 +21,20 @@ const Importer = (() => {
     if (typeof DecompressionStream === 'undefined') throw new Error('瀏覽器版本太舊，無法讀取 Excel 檔，請改用 CSV 或更新瀏覽器');
     const ds = new DecompressionStream('deflate-raw');
     const out = new Blob([bytes]).stream().pipeThrough(ds);
-    return new Uint8Array(await new Response(out).arrayBuffer());
+    // 限制解壓後大小，避免壓縮炸彈把分頁記憶體吃光
+    const MAX = 100 * 1024 * 1024;
+    const reader = out.getReader();
+    const chunks = []; let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > MAX) { reader.cancel().catch(() => {}); throw new Error('檔案解壓後太大（超過 100 MB），請拆成較小的檔案'); }
+      chunks.push(value);
+    }
+    const res = new Uint8Array(total); let o = 0;
+    chunks.forEach((c) => { res.set(c, o); o += c.length; });
+    return res;
   }
 
   async function unzip(buf) {
@@ -216,6 +229,13 @@ const Importer = (() => {
   }
 
   async function readFile(file) {
+    const sheets = await readFileRaw(file);
+    const rowTotal = sheets.reduce((s, x) => s + (x.rows ? x.rows.length : 0), 0);
+    if (rowTotal > 20000) throw new Error('資料超過 20,000 列，請拆成較小的檔案再匯入');
+    return sheets;
+  }
+
+  async function readFileRaw(file) {
     const ext = (file.name.split('.').pop() || '').toLowerCase();
     if (file.size > 10 * 1024 * 1024) throw new Error('檔案超過 10 MB，請拆成較小的檔案');
     if (ext === 'mpp') throw new Error('.mpp 是 MS Project 的私有格式，請在 MS Project 選「檔案 → 另存新檔 → XML 格式（*.xml）」後再上傳');
@@ -904,7 +924,7 @@ const Importer = (() => {
     const v = b.querySelector('#imp-view'); if (v) v.onclick = () => { U.closeModal(); location.hash = '#/schedule'; App.refreshAll(); };
     const ec = b.querySelector('#imp-errcsv');
     if (ec) ec.onclick = () => downloadBlob(new Blob(['﻿' + [['類型', '工作表', '列', '名稱', '原因'], ...fail.map((f) => [KINDS[f.kind]?.label, f.sheet, f.rowNo, f.name, f.msg])]
-      .map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' }), 'import_errors.csv');
+      .map((r) => r.map((c) => { let s = String(c ?? ''); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return `"${s.replace(/"/g, '""')}"`; }).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' }), 'import_errors.csv');
     U.toast(fail.length ? `匯入完成，${fail.length} 筆失敗` : `已匯入 ${okTotal} 筆資料`, fail.length ? 'warn' : 'ok', 6000);
   }
 

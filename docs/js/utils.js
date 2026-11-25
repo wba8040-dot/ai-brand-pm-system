@@ -489,7 +489,7 @@ const U = (() => {
   function downloadCsv(filename, columns, rows) {
     const cell = (v) => {
       let s = v === null || v === undefined ? '' : String(v);
-      if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+      if (typeof v !== 'number' && /^[=+\-@\t\r]/.test(s)) s = "'" + s;
       return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
     };
     const lines = [columns.map((c) => cell(c.label)).join(',')]

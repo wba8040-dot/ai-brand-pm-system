@@ -840,7 +840,8 @@ const Schedule = (() => {
   // ---------------------------------------------------------------------
   // 開啟明細
   // ---------------------------------------------------------------------
-  const keyOf = (i) => `${i.kind}:${i.id}`;
+  // 編號會放進 HTML 屬性，只留安全字元（防止以自訂編號做屬性注入）
+  const keyOf = (i) => `${i.kind}:${String(i.id ?? '').replace(/[^w.:-]/g, '_')}`;
   const findItem = (key) => itemsAll.find((i) => keyOf(i) === key);
 
   function openItem(item) {
