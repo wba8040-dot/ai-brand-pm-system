@@ -100,6 +100,7 @@ const Pages = (() => {
         <select id="f-owner" aria-label="依負責人篩選"><option value="">全部負責人</option>${U.options((API.cache.members || []).map((m) => m.member_id), taskFilter.owner, { labels: Object.fromEntries((API.cache.members || []).map((m) => [m.member_id, m.name])) })}</select>
         <label class="check"><input type="checkbox" id="f-mine" ${taskFilter.mine ? 'checked' : ''}> 只看我的</label>
         <span class="spacer"></span>
+        <button class="btn outline" id="btn-export-tasks" title="匯出目前篩選結果為 CSV">⤓ 匯出 CSV</button>
         ${isLeaderOrPM() ? '<button class="btn primary" id="btn-new-task">＋ 新增任務</button>' : ''}
       </div>
 
@@ -116,6 +117,20 @@ const Pages = (() => {
       </div>`;
 
     const body = el.querySelector('#task-body');
+    let filtered = rows;
+
+    el.querySelector('#btn-export-tasks').onclick = () => {
+      U.downloadCsv(`任務_${U.today()}.csv`, [
+        { label: '任務ID', get: (t) => t.task_id }, { label: '任務名稱', get: (t) => t.name },
+        { label: '負責人', get: (t) => API.memberName(t.owner_id) }, { label: '活動', get: (t) => API.campaignName(t.campaign_id) },
+        { label: '預計開始', get: (t) => U.date(t.planned_start) }, { label: '預計完成', get: (t) => U.date(t.planned_end) },
+        { label: '實際進度', get: (t) => U.pct(t.actual_progress) }, { label: '預計進度', get: (t) => U.pct(t.planned_progress) },
+        { label: '狀態', get: (t) => t.status }, { label: '優先級', get: (t) => t.priority },
+        { label: '燈號', get: (t) => t.risk_light }, { label: '預估工時', get: (t) => t.estimated_hours },
+        { label: '實際工時', get: (t) => t.actual_hours }, { label: '阻塞原因', get: (t) => t.blocked_reason }
+      ], filtered);
+      U.toast(`已匯出 ${filtered.length} 筆任務`, 'ok');
+    };
 
     function draw() {
       const list = rows.filter((t) => {
@@ -131,6 +146,7 @@ const Pages = (() => {
         return true;
       });
       const total = list.length;
+      filtered = list;
       body.innerHTML = list.slice(0, taskFilter.limit).map((t) => {
         const over = isOverdue(t);
         const gap = U.num(t.progress_gap);

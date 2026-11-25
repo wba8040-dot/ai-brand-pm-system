@@ -6,7 +6,7 @@
   <title>AI 品牌行銷專案管理與成效預警平台</title>
   <meta name="theme-color" content="#0f172a">
   <link rel="preconnect" href="https://cdn.jsdelivr.net">
-  <link rel="stylesheet" href="css/style.css?v=9">
+  <link rel="stylesheet" href="css/style.css?v=10">
 </head>
 <body>
   <!-- 所有畫面都由 js/app.js 動態產生 -->
@@ -22,21 +22,25 @@
   <div id="toast-root" aria-live="polite" aria-atomic="false"></div>
 
   <!-- 外部套件：Supabase 用戶端、Chart.js 圖表 -->
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <!-- 已固定版本並加上 SRI 完整性檢查；升級時需同步更新 integrity 雜湊 -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.2/dist/umd/supabase.min.js"
+          integrity="sha384-7i/4BYWz4Mn+lJfg2HWfEPfZQ7tmFKF3CTSKlXBpxWjNlLjcg+T6smpHG4gLmU1u" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.6.2/dist/chart.umd.js"
+          integrity="sha384-6v90QmS9/d+iHiRNobeYCJN+p/WKobPtPwLJrBayxAjyYXYyzWmXX9/GQBoNDYki" crossorigin="anonymous"></script>
 
   <!-- 系統程式（順序不可調換） -->
-  <script src="js/config.js?v=9"></script>
-  <script src="js/utils.js?v=9"></script>
-  <script src="js/ux.js?v=9"></script>
-  <script src="js/api.js?v=9"></script>
-  <script src="js/auth.js?v=9"></script>
-  <script src="js/pages.js?v=9"></script>
-  <script src="js/dashboards.js?v=9"></script>
-  <script src="js/schedule.js?v=9"></script>
-  <script src="js/profile.js?v=9"></script>
-  <script src="js/importer.js?v=9"></script>
-  <script src="js/ai-actions.js?v=9"></script>
-  <script src="js/app.js?v=9"></script>
+  <script src="js/config.js?v=10"></script>
+  <script src="js/utils.js?v=10"></script>
+  <script src="js/ux.js?v=10"></script>
+  <script src="js/api.js?v=10"></script>
+  <script src="js/auth.js?v=10"></script>
+  <script src="js/pages.js?v=10"></script>
+  <script src="js/dashboards.js?v=10"></script>
+  <script src="js/schedule.js?v=10"></script>
+  <script src="js/budget.js?v=10"></script>
+  <script src="js/profile.js?v=10"></script>
+  <script src="js/importer.js?v=10"></script>
+  <script src="js/ai-actions.js?v=10"></script>
+  <script src="js/app.js?v=10"></script>
 </body>
 </html>

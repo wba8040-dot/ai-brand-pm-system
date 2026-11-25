@@ -15,6 +15,7 @@ const App = (() => {
     folder: '<path d="M3 6h6l2 2h10v11H3z"/>',
     users: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/>',
     gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>',
+    money: '<circle cx="12" cy="12" r="9"/><path d="M14.5 9.5c-.5-1-1.5-1.5-2.5-1.5-1.4 0-2.5.8-2.5 2s1 1.6 2.5 2 2.5.8 2.5 2-1.1 2-2.5 2c-1 0-2-.5-2.5-1.5"/><path d="M12 6.5V8M12 16v1.5"/>',
     calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M8 3v4M16 3v4"/><path d="M7 14h4M7 17h7"/>',
     profile: '<circle cx="12" cy="9" r="3.5"/><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M6.5 19c1-3 3-4.5 5.5-4.5s4.5 1.5 5.5 4.5"/>'
   };
@@ -29,6 +30,7 @@ const App = (() => {
     { key: 'risks',     label: '風險與問題',   icon: 'risk',     group: '工作' },
     { key: 'members',   label: '組員負荷',     icon: 'team',     group: '工作', roles: ['專案經理', '組長'] },
     { key: 'campaigns', label: '行銷活動',     icon: 'campaign', group: '行銷' },
+    { key: 'budget',    label: '預算與支出',   icon: 'money',    group: '行銷', roles: ['專案經理', '組長'] },
     { key: 'projects',  label: '專案管理',     icon: 'folder',   group: '管理', roles: ['專案經理', '組長'] },
     { key: 'accounts',  label: '成員與帳號',   icon: 'users',    group: '管理', roles: ['專案經理'] },
     { key: 'settings',  label: '公司設定',     icon: 'gear',     group: '管理', roles: ['專案經理'] },
@@ -38,6 +40,7 @@ const App = (() => {
   // 獨立模組的頁面（其餘頁面在 pages.js）
   const PAGE_MODULES = {
     schedule: (el) => Schedule.render(el),
+    budget: (el) => Budget.render(el),
     profile: (el) => Profile.render(el)
   };
 

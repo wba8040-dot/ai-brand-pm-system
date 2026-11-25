@@ -68,7 +68,8 @@ const U = (() => {
   const ROLE_COLOR = { '專案經理': '#6d28d9', '組長': '#0369a1', '組員': '#047857' };
 
   const CHIP = {
-    '完成': 'ok', '已完成': 'ok', '通過': 'ok', '已結案': 'ok', '已解決': 'ok', '已核准': 'ok', '成功': 'ok', '已發布': 'ok', '已啟用': 'ok',
+    '完成': 'ok', '已完成': 'ok', '通過': 'ok', '已結案': 'ok', '已解決': 'ok', '已核准': 'ok', '成功': 'ok', '已發布': 'ok', '已啟用': 'ok', '已付款': 'ok',
+    '待審核': 'warn', '已駁回': 'bad', '未付款': 'muted', '部分付款': 'info',
     '進行中': 'info', '處理中': 'info', '驗收中': 'info', '邀請中': 'warn',
     '未開始': 'muted', '待處理': 'warn', '待發送': 'warn', '未驗收': 'muted', '暫停': 'muted', '取消': 'muted', '規劃中': 'muted',
     '阻塞': 'bad', '失敗': 'bad', '未通過': 'bad', '退回': 'bad', '已退回': 'bad', '已停用': 'bad',
@@ -481,7 +482,30 @@ const U = (() => {
     return opts.join('');
   }
 
+  /**
+   * 下載 CSV（加 BOM 讓 Excel 正確顯示中文；以 ' 開頭擋掉 =、+、-、@ 開頭的試算表公式注入）
+   * columns: [{ label, get: (row) => value }]
+   */
+  function downloadCsv(filename, columns, rows) {
+    const cell = (v) => {
+      let s = v === null || v === undefined ? '' : String(v);
+      if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+      return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const lines = [columns.map((c) => cell(c.label)).join(',')]
+      .concat(rows.map((r) => columns.map((c) => cell(c.get(r))).join(',')));
+    const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
   return {
+    downloadCsv,
     esc, num, pct, money, int, dec, date, dateTime, today, addDays, daysBetween,
     ROLE_COLOR, chip, light, progressBar, toast,
     openModal, openDrawer, closeModal, isModalOpen, isModalDirty, confirmBox, rowsA11y, clearDraft, pruneDrafts,
